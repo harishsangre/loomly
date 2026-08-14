@@ -5,15 +5,8 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import type { MicrophoneDevice, RecorderOptions, RecorderStatus, RecordingState, Region } from '../../shared/recorder';
 import { getMicrophones } from '../ffmpeg/devices';
-import {
-  buildConcatArgs,
-  buildReencodeMp4Args,
-  buildRecordingRoot,
-  buildSegmentArgs,
-  buildStreamCopyMp4Args,
-  getDisplayName
-} from './linux-recorder';
 import { isFfmpegAvailable, runProcess } from '../ffmpeg/ffmpeg';
+import { getCurrentRecorderBackend, type RecorderBackend } from './recorder-backend';
 
 type StatusListener = (status: RecorderStatus) => void;
 
@@ -46,6 +39,7 @@ function defaultStatus(): RecorderStatus {
     ffmpegAvailable: false,
     ffmpegMessage: 'Checking FFmpeg...',
     platform: process.platform,
+    backendType: null,
     sessionType: process.env.XDG_SESSION_TYPE ?? null,
     microphones: [{ id: 'default', label: 'Default Microphone' }],
     error: null,
@@ -66,6 +60,7 @@ export class RecorderService extends EventEmitter {
   private segmentCounter = 0;
   private segmentFiles: string[] = [];
   private activeProcess: ReturnType<typeof spawn> | null = null;
+  private backend: RecorderBackend | null = null;
   private activeSegmentPath: string | null = null;
   private segmentStartedAt = 0;
   private accumulatedMs = 0;
@@ -101,15 +96,20 @@ export class RecorderService extends EventEmitter {
   }
 
   async initialize(): Promise<void> {
+    const backend = await getCurrentRecorderBackend();
+    this.backend = backend;
+    const backendError = await backend.getCompatibilityError();
     const [ffmpegAvailable, microphones] = await Promise.all([isFfmpegAvailable(), getMicrophones()]);
+
     this.ffmpegReady = ffmpegAvailable;
-    this.ffmpegMessage = ffmpegAvailable ? null : 'FFmpeg is required.\n\nUbuntu:\nsudo apt install ffmpeg';
+    this.ffmpegMessage = backendError ?? (ffmpegAvailable ? null : 'FFmpeg is required.\n\nUbuntu:\nsudo apt install ffmpeg\nWindows:\nInstall FFmpeg and add it to PATH.');
     this.availableMicrophones = microphones.length > 0 ? microphones : this.availableMicrophones;
     this.status = {
       ...this.status,
+      backendType: backend.type,
       microphone: this.availableMicrophones[0]?.id ?? this.status.microphone
     };
-    this.lastError = null;
+    this.lastError = backendError ?? null;
     this.emitStatus();
   }
 
@@ -140,7 +140,7 @@ export class RecorderService extends EventEmitter {
     if (this.state !== 'idle' && this.state !== 'finished') {
       throw new Error('A recording is already in progress.');
     }
-    this.ensureReadyForCapture();
+    await this.ensureReadyForCapture();
     this.validateOptions(options);
     await fs.mkdir(options.outputDirectory, { recursive: true });
 
@@ -152,7 +152,9 @@ export class RecorderService extends EventEmitter {
     this.segmentCounter = 0;
     this.segmentFiles = [];
     this.accumulatedMs = 0;
-    this.tempSessionPath = path.join(buildRecordingRoot(), 'temp', `session-${timestampId()}`);
+    const backend = this.backend ?? (await getCurrentRecorderBackend());
+    this.backend = backend;
+    this.tempSessionPath = path.join(backend.buildRecordingRoot(), 'temp', `session-${timestampId()}`);
     this.sessionDir = this.tempSessionPath;
     await fs.mkdir(this.tempSessionPath, { recursive: true });
     this.state = 'recording';
@@ -259,22 +261,12 @@ export class RecorderService extends EventEmitter {
     return this.status;
   }
 
-  private ensureReadyForCapture(): void {
-    if (process.platform !== 'linux') {
-      throw new Error('This MVP only supports Linux.');
-    }
-
-    const sessionType = (process.env.XDG_SESSION_TYPE ?? '').toLowerCase();
-    if (sessionType === 'wayland') {
-      throw new Error('Wayland screen capture is not supported in this MVP.\nPlease login using an Xorg/X11 session.');
-    }
-
-    if (sessionType !== 'x11') {
-      throw new Error('This MVP only supports X11 screen capture.');
-    }
+  private async ensureReadyForCapture(): Promise<void> {
+    const backend = await getCurrentRecorderBackend();
+    await backend.prepareForCapture();
 
     if (!this.ffmpegReady) {
-      throw new Error('FFmpeg is required.\n\nUbuntu:\nsudo apt install ffmpeg');
+      throw new Error('FFmpeg is required.\n\nUbuntu:\nsudo apt install ffmpeg\nWindows:\nInstall FFmpeg and add it to PATH.');
     }
   }
 
@@ -330,7 +322,9 @@ export class RecorderService extends EventEmitter {
     this.activeSegmentPath = segmentPath;
     this.segmentStartedAt = Date.now();
 
-    const args = buildSegmentArgs(this.currentOptions, segmentPath, getDisplayName());
+    const backend = this.backend ?? (await getCurrentRecorderBackend());
+    this.backend = backend;
+    const args = backend.buildSegmentArgs(this.currentOptions, segmentPath);
     const ffmpeg = spawn('ffmpeg', args, {
       stdio: ['ignore', 'ignore', 'pipe']
     });
@@ -415,19 +409,21 @@ export class RecorderService extends EventEmitter {
 
     const concatFile = path.join(this.sessionDir, 'segments.txt');
     const combinedFile = path.join(this.sessionDir, 'combined.mkv');
-    const outputDirectory = this.currentOptions?.outputDirectory || buildRecordingRoot();
+    const backend = this.backend ?? (await getCurrentRecorderBackend());
+    this.backend = backend;
+    const outputDirectory = this.currentOptions?.outputDirectory || backend.buildRecordingRoot();
     const outputFile = path.join(outputDirectory, `recording-${fileNameSafeTime()}.mp4`);
 
     await fs.mkdir(path.dirname(outputFile), { recursive: true });
     const concatContent = this.segmentFiles.map((segment) => `file '${segment.replace(/'/g, "'\\''")}'`).join(os.EOL);
     await fs.writeFile(concatFile, `${concatContent}${os.EOL}`, 'utf8');
 
-    await runProcess('ffmpeg', buildConcatArgs(concatFile, combinedFile));
+    await runProcess('ffmpeg', backend.buildConcatArgs(concatFile, combinedFile));
 
     try {
-      await runProcess('ffmpeg', buildStreamCopyMp4Args(combinedFile, outputFile));
+      await runProcess('ffmpeg', backend.buildStreamCopyMp4Args(combinedFile, outputFile));
     } catch {
-      await runProcess('ffmpeg', buildReencodeMp4Args(combinedFile, outputFile, this.currentOptions?.quality));
+      await runProcess('ffmpeg', backend.buildReencodeMp4Args(combinedFile, outputFile, this.currentOptions?.quality));
     }
 
     return outputFile;

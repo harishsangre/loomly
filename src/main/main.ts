@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { RecorderService } from './recorder/recorder.service';
 import { registerRecorderIpc } from './ipc/recorder.ipc';
 import type { RecorderStatus } from '../shared/recorder';
+import { getCurrentRecorderBackend } from './recorder/recorder-backend';
 
 let mainWindow: BrowserWindow | null = null;
 let recordingToolbarWindow: BrowserWindow | null = null;
@@ -122,6 +123,13 @@ function updateRecordingChrome(status: RecorderStatus): void {
 async function bootstrap(): Promise<void> {
   await app.whenReady();
   app.setName('Simple Recorder');
+
+  const backend = await getCurrentRecorderBackend();
+  const compatibilityError = await backend.getCompatibilityError();
+
+  if (compatibilityError && !backend.enabled) {
+    console.warn(`Recorder backend disabled for this platform: ${compatibilityError}`);
+  }
 
   const service = new RecorderService((status: RecorderStatus) => {
     mainWindow?.webContents.send('recorder:status-updated', status);

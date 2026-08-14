@@ -1,8 +1,20 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 
 const execFileAsync = promisify(execFile);
+
+export type SystemCompatibility = {
+  platform: NodeJS.Platform;
+  arch: string;
+  sessionType: string | null;
+  ffmpegAvailable: boolean;
+  ffmpegVersion: string | null;
+  reason: string | null;
+  supported: boolean;
+  windowsVersion: number | null;
+};
 
 export async function isFfmpegAvailable(): Promise<boolean> {
   try {
@@ -11,6 +23,141 @@ export async function isFfmpegAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function getSystemCompatibility(): Promise<SystemCompatibility> {
+  const platform = process.platform;
+  const arch = process.arch;
+  const sessionType = (process.env.XDG_SESSION_TYPE ?? '').toLowerCase() || null;
+  const windowsVersion = platform === 'win32' ? Number.parseInt(os.release().split('.')[0] ?? '0', 10) || null : null;
+
+  let ffmpegAvailable = false;
+  let ffmpegVersion: string | null = null;
+  let reason: string | null = null;
+
+  try {
+    const { stdout } = await execFileAsync('ffmpeg', ['-version']);
+    ffmpegAvailable = true;
+    ffmpegVersion = stdout.split('\n')[0]?.trim() ?? null;
+  } catch {
+    ffmpegAvailable = false;
+    reason = 'FFmpeg is required.\n\nUbuntu:\nsudo apt install ffmpeg\nWindows:\nInstall FFmpeg and add it to PATH.';
+  }
+
+  if (!ffmpegAvailable) {
+    return {
+      platform,
+      arch,
+      sessionType,
+      ffmpegAvailable: false,
+      ffmpegVersion: null,
+      reason,
+      supported: false,
+      windowsVersion
+    };
+  }
+
+  if (platform === 'win32') {
+    if (!['x64', 'arm64'].includes(arch)) {
+      return {
+        platform,
+        arch,
+        sessionType,
+        ffmpegAvailable: true,
+        ffmpegVersion,
+        reason: `This build supports Windows x64 and arm64 only. Detected architecture: ${arch}.`,
+        supported: false,
+        windowsVersion
+      };
+    }
+
+    if (!windowsVersion || windowsVersion < 10) {
+      return {
+        platform,
+        arch,
+        sessionType,
+        ffmpegAvailable: true,
+        ffmpegVersion,
+        reason: `Windows 10 or newer is required. Detected version: ${windowsVersion ?? 'unknown'}.`,
+        supported: false,
+        windowsVersion
+      };
+    }
+
+    return {
+      platform,
+      arch,
+      sessionType,
+      ffmpegAvailable: true,
+      ffmpegVersion,
+      reason: null,
+      supported: true,
+      windowsVersion
+    };
+  }
+
+  if (platform !== 'linux') {
+    return {
+      platform,
+      arch,
+      sessionType,
+      ffmpegAvailable: true,
+      ffmpegVersion,
+      reason: `This build supports Linux and Windows only. Detected platform: ${platform}.`,
+      supported: false,
+      windowsVersion
+    };
+  }
+
+  if (!['x64', 'arm64'].includes(arch)) {
+    return {
+      platform,
+      arch,
+      sessionType,
+      ffmpegAvailable: true,
+      ffmpegVersion,
+      reason: `This build supports Linux x64 and arm64 only. Detected architecture: ${arch}.`,
+      supported: false,
+      windowsVersion
+    };
+  }
+
+  if (sessionType === 'wayland') {
+    return {
+      platform,
+      arch,
+      sessionType,
+      ffmpegAvailable: true,
+      ffmpegVersion,
+      reason: 'Wayland screen capture is not supported in this MVP.\nPlease login using an Xorg/X11 session.',
+      supported: false,
+      windowsVersion
+    };
+  }
+
+  if (sessionType !== 'x11' && sessionType !== null) {
+    return {
+      platform,
+      arch,
+      sessionType,
+      ffmpegAvailable: true,
+      ffmpegVersion,
+      reason: 'This MVP only supports X11 screen capture.',
+      supported: false,
+      windowsVersion
+    };
+  }
+
+  return {
+    platform,
+    arch,
+    sessionType,
+    ffmpegAvailable: true,
+    ffmpegVersion,
+    reason: null,
+    supported: true,
+    windowsVersion
+  };
 }
 
 export async function runProcess(

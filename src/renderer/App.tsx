@@ -90,6 +90,7 @@ const defaultStatus: RecorderStatus = {
   ffmpegAvailable: false,
   ffmpegMessage: 'Checking FFmpeg...',
   platform: 'linux',
+  backendType: 'linux-x11',
   sessionType: null,
   microphones: [{ id: 'default', label: 'Default Microphone' }],
   error: null,
@@ -397,13 +398,16 @@ export default function App() {
   const shellState = shellStateFor(status.state);
   const isRecordingScreen = status.state === 'recording' || status.state === 'paused' || status.state === 'processing';
   const environmentIssue =
-    status.platform !== 'linux'
-      ? 'This MVP only supports Linux.'
-      : status.sessionType?.toLowerCase() === 'wayland'
-        ? 'Wayland screen capture is not supported in this MVP. Please login using an Xorg/X11 session.'
-        : status.sessionType?.toLowerCase() !== 'x11'
-          ? 'This MVP only supports X11 screen capture.'
-          : null;
+    status.error ??
+    (status.backendType === 'windows'
+      ? 'Windows capture is still being prepared. Current release supports Linux X11 capture only.'
+      : status.platform !== 'linux'
+        ? 'This MVP only supports Linux.'
+        : status.sessionType?.toLowerCase() === 'wayland'
+          ? 'Wayland screen capture is not supported in this MVP. Please login using an Xorg/X11 session.'
+          : status.sessionType?.toLowerCase() !== 'x11'
+            ? 'This MVP only supports X11 screen capture.'
+            : null);
   const navigateToPage = (next: Page) => {
     setPage(next);
     pushPage(next);

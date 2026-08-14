@@ -37,6 +37,8 @@ export interface CaptureDevices {
   defaultOutputDirectory: string;
 }
 
+export type RecorderBackendType = 'linux-x11' | 'windows';
+
 export interface RecorderStatus {
   state: RecordingState;
   captureMode: CaptureMode;
@@ -46,6 +48,7 @@ export interface RecorderStatus {
   ffmpegAvailable: boolean;
   ffmpegMessage: string | null;
   platform: NodeJS.Platform;
+  backendType?: RecorderBackendType | null;
   sessionType: string | null;
   microphones: MicrophoneDevice[];
   error: string | null;
