@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { RecorderOptions, RecorderStatus, Region, MicrophoneDevice } from '../shared/recorder';
+import type { CaptureDevices, RecorderOptions, RecorderStatus, Region, MicrophoneDevice } from '../shared/recorder';
 
 const recorderApi = {
   getStatus: (): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:get-status'),
   getMicrophones: (): Promise<MicrophoneDevice[]> => ipcRenderer.invoke('recorder:get-microphones'),
+  getCaptureDevices: (): Promise<CaptureDevices> => ipcRenderer.invoke('recorder:get-capture-devices'),
+  selectOutputDirectory: (currentDirectory: string): Promise<string | null> =>
+    ipcRenderer.invoke('recorder:select-output-directory', currentDirectory),
   readRecording: (filePath: string): Promise<ArrayBuffer> => ipcRenderer.invoke('recorder:read-recording', filePath),
   getRecordingThumbnail: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('recorder:get-recording-thumbnail', filePath),

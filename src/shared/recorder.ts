@@ -1,5 +1,7 @@
 export type RecordingState = 'idle' | 'recording' | 'paused' | 'processing' | 'finished';
 export type CaptureMode = 'fullscreen' | 'region';
+export type RecordingFrameRate = 24 | 30 | 60;
+export type RecordingQuality = 'high' | 'balanced' | 'compact';
 
 export interface Region {
   x: number;
@@ -11,12 +13,28 @@ export interface Region {
 export interface RecorderOptions {
   captureMode: CaptureMode;
   microphone: string;
+  systemAudio: string;
+  camera: string;
+  frameRate: RecordingFrameRate;
+  quality: RecordingQuality;
+  outputDirectory: string;
   region?: Region;
 }
 
 export interface MicrophoneDevice {
   id: string;
   label: string;
+}
+
+export interface CaptureDevice {
+  id: string;
+  label: string;
+}
+
+export interface CaptureDevices {
+  systemAudio: CaptureDevice[];
+  cameras: CaptureDevice[];
+  defaultOutputDirectory: string;
 }
 
 export interface RecorderStatus {

@@ -1,10 +1,12 @@
-import type { MicrophoneDevice, RecorderOptions, RecorderStatus, Region } from '../../shared/recorder';
+import type { CaptureDevices, MicrophoneDevice, RecorderOptions, RecorderStatus, Region } from '../../shared/recorder';
 
 declare global {
   interface Window {
     recorder: {
       getStatus: () => Promise<RecorderStatus>;
       getMicrophones: () => Promise<MicrophoneDevice[]>;
+      getCaptureDevices: () => Promise<CaptureDevices>;
+      selectOutputDirectory: (currentDirectory: string) => Promise<string | null>;
       readRecording: (filePath: string) => Promise<ArrayBuffer>;
       getRecordingThumbnail: (filePath: string) => Promise<string>;
       start: (options: RecorderOptions) => Promise<RecorderStatus>;

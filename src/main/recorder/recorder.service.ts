@@ -142,6 +142,7 @@ export class RecorderService extends EventEmitter {
     }
     this.ensureReadyForCapture();
     this.validateOptions(options);
+    await fs.mkdir(options.outputDirectory, { recursive: true });
 
     const microphone = this.resolveMicrophoneId(options.microphone);
     this.currentOptions = options;
@@ -282,6 +283,22 @@ export class RecorderService extends EventEmitter {
       throw new Error('Please select a microphone.');
     }
 
+    if (![24, 30, 60].includes(options.frameRate)) {
+      throw new Error('Please select a supported frame rate.');
+    }
+
+    if (!['high', 'balanced', 'compact'].includes(options.quality)) {
+      throw new Error('Please select a supported recording quality.');
+    }
+
+    if (!options.outputDirectory || !path.isAbsolute(options.outputDirectory)) {
+      throw new Error('Please select a valid recording folder.');
+    }
+
+    if (options.camera !== 'none' && !/^\/dev\/video\d+$/.test(options.camera)) {
+      throw new Error('Please select a valid camera device.');
+    }
+
     if (options.captureMode === 'region') {
       if (!options.region) {
         throw new Error('Please select a capture region.');
@@ -398,7 +415,8 @@ export class RecorderService extends EventEmitter {
 
     const concatFile = path.join(this.sessionDir, 'segments.txt');
     const combinedFile = path.join(this.sessionDir, 'combined.mkv');
-    const outputFile = path.join(buildRecordingRoot(), `recording-${fileNameSafeTime()}.mp4`);
+    const outputDirectory = this.currentOptions?.outputDirectory || buildRecordingRoot();
+    const outputFile = path.join(outputDirectory, `recording-${fileNameSafeTime()}.mp4`);
 
     await fs.mkdir(path.dirname(outputFile), { recursive: true });
     const concatContent = this.segmentFiles.map((segment) => `file '${segment.replace(/'/g, "'\\''")}'`).join(os.EOL);
@@ -409,7 +427,7 @@ export class RecorderService extends EventEmitter {
     try {
       await runProcess('ffmpeg', buildStreamCopyMp4Args(combinedFile, outputFile));
     } catch {
-      await runProcess('ffmpeg', buildReencodeMp4Args(combinedFile, outputFile));
+      await runProcess('ffmpeg', buildReencodeMp4Args(combinedFile, outputFile, this.currentOptions?.quality));
     }
 
     return outputFile;

@@ -38,7 +38,15 @@ import {
   X
 } from 'lucide-react';
 
-import type { CaptureMode, MicrophoneDevice, RecorderStatus, Region } from '@/shared/recorder';
+import type {
+  CaptureDevice,
+  CaptureMode,
+  MicrophoneDevice,
+  RecorderStatus,
+  RecordingFrameRate,
+  RecordingQuality,
+  Region
+} from '@/shared/recorder';
 import { RegionSelector, RegionSelectorControls } from './components/RegionSelector';
 
 type Page = 'library' | 'video';
@@ -347,6 +355,13 @@ export default function App() {
   const [microphones, setMicrophones] = useState<MicrophoneDevice[]>(defaultStatus.microphones);
   const [captureMode, setCaptureMode] = useState<CaptureMode>('fullscreen');
   const [selectedMicrophone, setSelectedMicrophone] = useState('default');
+  const [systemAudioDevices, setSystemAudioDevices] = useState<CaptureDevice[]>([{ id: 'none', label: 'Not set' }]);
+  const [cameraDevices, setCameraDevices] = useState<CaptureDevice[]>([{ id: 'none', label: 'Not set' }]);
+  const [selectedSystemAudio, setSelectedSystemAudio] = useState('none');
+  const [selectedCamera, setSelectedCamera] = useState('none');
+  const [frameRate, setFrameRate] = useState<RecordingFrameRate>(30);
+  const [quality, setQuality] = useState<RecordingQuality>('high');
+  const [outputDirectory, setOutputDirectory] = useState('');
   const [selectedRegion, setSelectedRegion] = useState<Region | null>(null);
   const [selectedVideoPath, setSelectedVideoPath] = useState<string | null>(null);
   const [page, setPage] = useState<Page>(() => getPageFromHash());
@@ -408,6 +423,13 @@ export default function App() {
     void window.recorder.getMicrophones().then((devices) => {
       if (!alive) return;
       setMicrophones(devices);
+    });
+
+    void window.recorder.getCaptureDevices().then((devices) => {
+      if (!alive) return;
+      setSystemAudioDevices(devices.systemAudio);
+      setCameraDevices(devices.cameras);
+      setOutputDirectory((current) => current || devices.defaultOutputDirectory);
     });
 
     const unsubscribe = window.recorder.onStatusUpdated((nextStatus) => {
@@ -557,7 +579,23 @@ export default function App() {
 
   async function handleRefreshMicrophones() {
     try {
-      setMicrophones(await window.recorder.getMicrophones());
+      const [nextMicrophones, devices] = await Promise.all([
+        window.recorder.getMicrophones(),
+        window.recorder.getCaptureDevices()
+      ]);
+      setMicrophones(nextMicrophones);
+      setSystemAudioDevices(devices.systemAudio);
+      setCameraDevices(devices.cameras);
+      setOutputDirectory((current) => current || devices.defaultOutputDirectory);
+    } catch (error) {
+      setStatus((current) => ({ ...current, error: extractErrorMessage(error) }));
+    }
+  }
+
+  async function handleSelectOutputDirectory() {
+    try {
+      const selected = await window.recorder.selectOutputDirectory(outputDirectory);
+      if (selected) setOutputDirectory(selected);
     } catch (error) {
       setStatus((current) => ({ ...current, error: extractErrorMessage(error) }));
     }
@@ -565,11 +603,22 @@ export default function App() {
 
   async function handleStart() {
     try {
+      let targetOutputDirectory = outputDirectory;
+      if (!targetOutputDirectory) {
+        const devices = await window.recorder.getCaptureDevices();
+        targetOutputDirectory = devices.defaultOutputDirectory;
+        setOutputDirectory(targetOutputDirectory);
+      }
       setSelectedVideoPath(null);
       navigateToPage('library');
       const next = await window.recorder.start({
         captureMode,
         microphone: selectedMicrophone,
+        systemAudio: selectedSystemAudio,
+        camera: selectedCamera,
+        frameRate,
+        quality,
+        outputDirectory: targetOutputDirectory,
         region: captureMode === 'region' ? selectedRegion ?? undefined : undefined
       });
       setStatus(next);
@@ -897,26 +946,39 @@ export default function App() {
                     </div>
 
                     <div className="mt-4 grid gap-4 md:grid-cols-3">
-                      <label className="flex h-16 items-center gap-3 rounded-[12px] border border-slate-200 px-3.5">
-                        <span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-violet-50 text-violet-600"><Mic className="size-[18px]" /></span>
+                      <label className="relative flex h-16 cursor-pointer items-center gap-3 rounded-[12px] border border-slate-200 px-3.5">
+                        <select value={selectedMicrophone} onChange={(event) => setSelectedMicrophone(event.target.value)} className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0">
+                          {microphones.map((device) => <option key={device.id} value={device.id}>{device.label}</option>)}
+                        </select>
+                        <span className="pointer-events-none flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-violet-50 text-violet-600"><Mic className="size-[18px]" /></span>
                         <span className="min-w-0 flex-1">
                           <span className="block text-[11px] text-slate-500">Microphone</span>
-                          <select value={selectedMicrophone} onChange={(event) => setSelectedMicrophone(event.target.value)} className="mt-0.5 w-full appearance-none bg-transparent text-xs font-medium text-slate-800 outline-none">
-                            {microphones.map((device) => <option key={device.id} value={device.id}>{device.label}</option>)}
-                          </select>
+                          <span className="mt-0.5 block truncate text-xs font-medium text-slate-800">{microphones.find((device) => device.id === selectedMicrophone)?.label ?? 'Default Microphone'}</span>
                         </span>
-                        <ChevronDown className="size-4 text-slate-500" />
+                        <ChevronDown className="pointer-events-none size-4 text-slate-500" />
                       </label>
-                      <div className="flex h-16 items-center gap-3 rounded-[12px] border border-slate-200 px-3.5">
-                        <span className="flex size-9 items-center justify-center rounded-[10px] bg-blue-50 text-blue-600"><Volume2 className="size-[18px]" /></span>
-                        <span className="flex-1"><span className="block text-[11px] text-slate-500">System audio</span><span className="mt-0.5 block text-xs font-medium">Not set</span></span>
-                        <ChevronDown className="size-4 text-slate-500" />
-                      </div>
-                      <div className="flex h-16 items-center gap-3 rounded-[12px] border border-slate-200 px-3.5">
-                        <span className="flex size-9 items-center justify-center rounded-[10px] bg-indigo-50 text-indigo-600"><Camera className="size-[18px]" /></span>
-                        <span className="flex-1"><span className="block text-[11px] text-slate-500">Camera</span><span className="mt-0.5 block text-xs font-medium">Not set</span></span>
-                        <ChevronDown className="size-4 text-slate-500" />
-                      </div>
+                      <label className="relative flex h-16 cursor-pointer items-center gap-3 rounded-[12px] border border-slate-200 px-3.5">
+                        <select value={selectedSystemAudio} onChange={(event) => setSelectedSystemAudio(event.target.value)} className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0">
+                          {systemAudioDevices.map((device) => <option key={device.id} value={device.id}>{device.label}</option>)}
+                        </select>
+                        <span className="pointer-events-none flex size-9 items-center justify-center rounded-[10px] bg-blue-50 text-blue-600"><Volume2 className="size-[18px]" /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[11px] text-slate-500">System audio</span>
+                          <span className="mt-0.5 block truncate text-xs font-medium text-slate-800">{systemAudioDevices.find((device) => device.id === selectedSystemAudio)?.label ?? 'Not set'}</span>
+                        </span>
+                        <ChevronDown className="pointer-events-none size-4 text-slate-500" />
+                      </label>
+                      <label className="relative flex h-16 cursor-pointer items-center gap-3 rounded-[12px] border border-slate-200 px-3.5">
+                        <select value={selectedCamera} onChange={(event) => setSelectedCamera(event.target.value)} className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0">
+                          {cameraDevices.map((device) => <option key={device.id} value={device.id}>{device.label}</option>)}
+                        </select>
+                        <span className="pointer-events-none flex size-9 items-center justify-center rounded-[10px] bg-indigo-50 text-indigo-600"><Camera className="size-[18px]" /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[11px] text-slate-500">Camera</span>
+                          <span className="mt-0.5 block truncate text-xs font-medium text-slate-800">{cameraDevices.find((device) => device.id === selectedCamera)?.label ?? 'Not set'}</span>
+                        </span>
+                        <ChevronDown className="pointer-events-none size-4 text-slate-500" />
+                      </label>
                     </div>
 
                     <div className="mt-4 flex items-center gap-2.5 rounded-[10px] bg-violet-50 px-4 py-3 text-xs text-violet-600">
@@ -932,11 +994,11 @@ export default function App() {
                   <h3 className="text-[17px] font-semibold text-slate-900">Recording settings</h3>
 
                   <SettingsField label="Mode">
-                    <select value={captureMode} onChange={(event) => setCaptureMode(event.target.value as CaptureMode)} className="h-11 w-full appearance-none rounded-[11px] border border-slate-200 bg-white px-3.5 text-sm outline-none">
+                    <select value={captureMode} onChange={(event) => setCaptureMode(event.target.value as CaptureMode)} className="relative z-10 h-11 w-full cursor-pointer appearance-none rounded-[11px] border border-slate-200 bg-white px-3.5 text-sm outline-none">
                       <option value="fullscreen">Full screen</option>
                       <option value="region">Custom area</option>
                     </select>
-                    <ChevronDown className="pointer-events-none absolute bottom-3.5 right-3.5 size-4 text-slate-500" />
+                    <ChevronDown className="pointer-events-none absolute bottom-3.5 right-3.5 z-20 size-4 text-slate-500" />
                   </SettingsField>
 
                   <div className="mt-5">
@@ -952,15 +1014,25 @@ export default function App() {
                   </div>
 
                   <SettingsField label="Frame rate">
-                    <div className="flex h-11 items-center justify-between rounded-[11px] border border-slate-200 px-3.5 text-sm"><span>30 FPS</span><ChevronDown className="size-4 text-slate-500" /></div>
+                    <select value={frameRate} onChange={(event) => setFrameRate(Number(event.target.value) as RecordingFrameRate)} className="relative z-10 h-11 w-full cursor-pointer appearance-none rounded-[11px] border border-slate-200 bg-white px-3.5 text-sm outline-none">
+                      <option value={24}>24 FPS</option>
+                      <option value={30}>30 FPS</option>
+                      <option value={60}>60 FPS</option>
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute bottom-3.5 right-3.5 z-20 size-4 text-slate-500" />
                   </SettingsField>
                   <SettingsField label="Quality">
-                    <div className="flex h-11 items-center justify-between rounded-[11px] border border-slate-200 px-3.5 text-sm"><span>High (Recommended)</span><ChevronDown className="size-4 text-slate-500" /></div>
+                    <select value={quality} onChange={(event) => setQuality(event.target.value as RecordingQuality)} className="relative z-10 h-11 w-full cursor-pointer appearance-none rounded-[11px] border border-slate-200 bg-white px-3.5 text-sm outline-none">
+                      <option value="high">High (Recommended)</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="compact">Compact</option>
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute bottom-3.5 right-3.5 z-20 size-4 text-slate-500" />
                   </SettingsField>
                   <SettingsField label="Save recordings to">
                     <div className="flex h-11 overflow-hidden rounded-[11px] border border-slate-200">
-                      <span className="flex min-w-0 flex-1 items-center truncate bg-slate-50 px-3.5 text-xs text-slate-500">~/Videos/SimpleRecorder</span>
-                      <span className="flex w-12 items-center justify-center border-l border-slate-200 text-slate-500"><FolderOpen className="size-4" /></span>
+                      <span className="flex min-w-0 flex-1 items-center truncate bg-slate-50 px-3.5 text-xs text-slate-500" title={outputDirectory}>{outputDirectory || 'Loading folder...'}</span>
+                      <button type="button" onClick={() => void handleSelectOutputDirectory()} className="flex w-12 items-center justify-center border-l border-slate-200 text-slate-500 transition hover:bg-slate-50" aria-label="Choose recording folder"><FolderOpen className="size-4" /></button>
                     </div>
                   </SettingsField>
 

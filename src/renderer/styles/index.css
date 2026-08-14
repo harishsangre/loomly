@@ -51,6 +51,11 @@ select {
   font: inherit;
 }
 
+select {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
 @layer base {
   .theme {
     --font-heading: var(--font-sans);

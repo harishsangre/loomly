@@ -1,9 +1,10 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, screen } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { RecorderOptions, Region, RecorderStatus } from '../../shared/recorder';
 import { runProcess } from '../ffmpeg/ffmpeg';
+import { getCaptureDevices } from '../ffmpeg/devices';
 import { RecorderService } from '../recorder/recorder.service';
 
 interface RegionSelectorState {
@@ -113,6 +114,16 @@ export function registerRecorderIpc(args: {
 
   ipcMain.handle('recorder:get-microphones', async () => {
     return args.service.getMicrophones();
+  });
+
+  ipcMain.handle('recorder:get-capture-devices', async () => getCaptureDevices());
+
+  ipcMain.handle('recorder:select-output-directory', async (_event, currentDirectory?: string) => {
+    const result = await dialog.showOpenDialog({
+      defaultPath: currentDirectory,
+      properties: ['openDirectory', 'createDirectory']
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
   ipcMain.handle('recorder:read-recording', async (_event, filePath: string) => {
