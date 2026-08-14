@@ -22,7 +22,7 @@ function run(command, args, options = {}) {
   const child = spawn(command, args, {
     stdio: 'inherit',
     env,
-    shell: false,
+    shell: process.platform === 'win32',
     ...options
   });
 
@@ -40,7 +40,7 @@ function runAndWait(command, args, options = {}) {
     const child = spawn(command, args, {
       stdio: 'inherit',
       env,
-      shell: false,
+      shell: process.platform === 'win32',
       ...options
     });
 
