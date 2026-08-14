@@ -20,6 +20,7 @@ import {
   Minus,
   Monitor,
   MoreVertical,
+  PencilLine,
   Pause,
   Play,
   Plus,
@@ -374,6 +375,9 @@ export default function App() {
   const [loadingRegion, setLoadingRegion] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [compactView, setCompactView] = useState(false);
+  const [editingRecordingPath, setEditingRecordingPath] = useState<string | null>(null);
+  const [editingRecordingTitle, setEditingRecordingTitle] = useState('');
+  const editingTitleInputRef = useRef<HTMLInputElement | null>(null);
   const lastCommittedPathRef = useRef<string | null>(null);
 
   const regionSelectorMode = useMemo(() => new URLSearchParams(window.location.search).get('mode') === 'region-selector-overlay', []);
@@ -562,6 +566,17 @@ export default function App() {
     document.title = page === 'video' ? 'Local Zoom - Player' : 'Local Zoom - Library';
   }, [page]);
 
+  useEffect(() => {
+    if (!editingRecordingPath) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      editingTitleInputRef.current?.focus();
+      editingTitleInputRef.current?.select();
+    }, 0);
+  }, [editingRecordingPath]);
+
   async function handleSelectRegion() {
     setLoadingRegion(true);
     try {
@@ -698,6 +713,45 @@ export default function App() {
 
   function toggleTrash(path: string) {
     updateRecording(path, (item) => ({ ...item, trashed: !item.trashed }));
+  }
+
+  function beginRenameRecording(path: string) {
+    const current = recordings.find((item) => item.path === path);
+    if (!current) {
+      return;
+    }
+
+    setEditingRecordingPath(path);
+    setEditingRecordingTitle(current.title);
+  }
+
+  function commitRenameRecording() {
+    if (!editingRecordingPath) {
+      return;
+    }
+
+    const current = recordings.find((item) => item.path === editingRecordingPath);
+    if (!current) {
+      setEditingRecordingPath(null);
+      setEditingRecordingTitle('');
+      return;
+    }
+
+    const trimmed = editingRecordingTitle.trim();
+    if (!trimmed || trimmed === current.title) {
+      setEditingRecordingPath(null);
+      setEditingRecordingTitle('');
+      return;
+    }
+
+    updateRecording(editingRecordingPath, (item) => ({ ...item, title: trimmed }));
+    setEditingRecordingPath(null);
+    setEditingRecordingTitle('');
+  }
+
+  function cancelRenameRecording() {
+    setEditingRecordingPath(null);
+    setEditingRecordingTitle('');
   }
 
   function handleDownload() {
@@ -865,6 +919,7 @@ export default function App() {
                         onClick={() => setCompactView(false)}
                         className={`flex w-11 items-center justify-center border-r border-slate-200 ${!compactView ? 'text-violet-700' : 'text-slate-500'}`}
                         aria-label="Grid view"
+                        title="Grid view"
                       >
                         <LayoutGrid className="size-4" />
                       </button>
@@ -873,6 +928,7 @@ export default function App() {
                         onClick={() => setCompactView(true)}
                         className={`flex w-11 items-center justify-center ${compactView ? 'text-violet-700' : 'text-slate-500'}`}
                         aria-label="List view"
+                        title="List view"
                       >
                         <List className="size-4" />
                       </button>
@@ -892,7 +948,52 @@ export default function App() {
                         <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-white">{item.durationLabel}</span>
                       </button>
                       <div className="px-3.5 pb-3 pt-3">
-                        <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                        {editingRecordingPath === item.path ? (
+                          <div className="mb-2 flex items-center gap-2">
+                            <input
+                              ref={editingTitleInputRef}
+                              value={editingRecordingTitle}
+                              onChange={(event) => setEditingRecordingTitle(event.target.value)}
+                              onBlur={() => commitRenameRecording()}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  commitRenameRecording();
+                                }
+
+                                if (event.key === 'Escape') {
+                                  event.preventDefault();
+                                  cancelRenameRecording();
+                                }
+                              }}
+                              className="h-9 min-w-0 flex-1 rounded-[10px] border border-slate-200 bg-slate-50 px-3 text-sm font-semibold outline-none"
+                              aria-label="Rename recording title"
+                            />
+                            <button
+                              type="button"
+                              onClick={commitRenameRecording}
+                              className="rounded-[10px] border border-slate-200 px-2.5 py-1.5 text-xs transition hover:bg-slate-50"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelRenameRecording}
+                              className="rounded-[10px] border border-slate-200 px-2.5 py-1.5 text-xs transition hover:bg-slate-50"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => beginRenameRecording(item.path)}
+                            className="block w-full text-left text-sm font-semibold text-slate-900 transition hover:text-violet-700"
+                            title="Rename recording"
+                          >
+                            {item.title}
+                          </button>
+                        )}
                         <p className="mt-1 text-xs text-slate-500">{formatRelativeDate(item.createdAt)} · Saved locally</p>
                         <div className="mt-3 flex items-center gap-2">
                           <button type="button" onClick={() => toggleFavorite(item.path)} className={`flex size-8 items-center justify-center rounded-[9px] border border-slate-200 ${item.favorite ? 'bg-violet-50 text-violet-700' : 'text-slate-500 hover:bg-slate-50'}`} aria-label="Favorite">
@@ -903,6 +1004,15 @@ export default function App() {
                           </button>
                           <button type="button" onClick={() => toggleTrash(item.path)} className="flex size-8 items-center justify-center rounded-[9px] border border-slate-200 text-slate-500 hover:bg-slate-50" aria-label="Move to trash">
                             <Trash className="size-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => beginRenameRecording(item.path)}
+                            className="flex size-8 items-center justify-center rounded-[9px] border border-slate-200 text-slate-500 hover:bg-slate-50"
+                            aria-label="Rename recording"
+                            title="Rename recording"
+                          >
+                            <PencilLine className="size-4" />
                           </button>
                           <MoreVertical className="ml-auto size-4 text-slate-400" />
                         </div>
@@ -1241,6 +1351,7 @@ export default function App() {
                           onClick={() => setCompactView((current) => !current)}
                           className="flex h-11 items-center justify-center rounded-[12px] border border-[var(--border)] bg-[var(--surface-2)] px-3.5 transition hover:bg-[var(--surface-1)]"
                           aria-label="Toggle compact view"
+                          title={compactView ? 'List view' : 'Grid view'}
                         >
                           <LayoutGrid className="h-4 w-4" style={{ color: 'var(--text-accent)' }} />
                         </button>
@@ -1260,7 +1371,7 @@ export default function App() {
                             type="button"
                             onClick={() => openRecording(item)}
                             className="relative block w-full text-left"
-                          >
+                        >
                             <div className="relative h-[148px] overflow-hidden">
                               <img
                                 src={recordingThumbnails[item.path] ?? buildLibraryPosterDataUri(item)}
@@ -1277,10 +1388,57 @@ export default function App() {
                             </div>
                           </button>
                           <div className="px-4 py-3.5">
-                            <p className="mb-1 text-sm font-semibold">{item.title}</p>
-                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                              {item.meta}
-                            </p>
+                            {editingRecordingPath === item.path ? (
+                              <div className="mb-2 flex items-center gap-2">
+                                <input
+                                  ref={editingTitleInputRef}
+                                  value={editingRecordingTitle}
+                                  onChange={(event) => setEditingRecordingTitle(event.target.value)}
+                                  onBlur={() => commitRenameRecording()}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                      event.preventDefault();
+                                      commitRenameRecording();
+                                    }
+
+                                    if (event.key === 'Escape') {
+                                      event.preventDefault();
+                                      cancelRenameRecording();
+                                    }
+                                  }}
+                                  className="h-9 min-w-0 flex-1 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-1)] px-3 text-sm font-semibold outline-none"
+                                  aria-label="Rename recording title"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={commitRenameRecording}
+                                  className="rounded-[var(--radius)] border border-[var(--border)] px-2.5 py-1.5 text-xs transition hover:bg-[var(--surface-1)]"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelRenameRecording}
+                                  className="rounded-[var(--radius)] border border-[var(--border)] px-2.5 py-1.5 text-xs transition hover:bg-[var(--surface-1)]"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => beginRenameRecording(item.path)}
+                                  className="mb-1 block w-full text-left text-sm font-semibold transition hover:text-violet-700"
+                                  title="Rename recording"
+                                >
+                                  {item.title}
+                                </button>
+                                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                  {item.meta}
+                                </p>
+                              </>
+                            )}
                             <div className="mt-3 flex flex-wrap gap-2">
                               <button
                                 type="button"
@@ -1305,6 +1463,14 @@ export default function App() {
                                 style={{ color: item.trashed ? 'var(--text-success)' : 'var(--text-secondary)' }}
                               >
                                 {item.trashed ? 'Restore' : 'Trash'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => beginRenameRecording(item.path)}
+                                className="rounded-[9px] border border-[var(--border)] px-2.5 py-1.5 text-[11px] transition hover:bg-[var(--surface-1)]"
+                                style={{ color: 'var(--text-secondary)' }}
+                              >
+                                Rename
                               </button>
                             </div>
                           </div>
@@ -1513,10 +1679,70 @@ export default function App() {
                   >
                     <ArrowLeft className="h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
                   </button>
-                  <h1 className="text-sm font-medium">{activeRecording?.title ?? 'Recording playback'}</h1>
-                  <span className="inline-flex h-[13px] w-[13px] items-center justify-center text-[13px]" style={{ color: 'var(--text-muted)' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (activeRecording) {
+                        beginRenameRecording(activeRecording.path);
+                      }
+                    }}
+                    className="text-left text-sm font-medium transition hover:text-violet-700"
+                    title="Rename recording"
+                    disabled={!activeRecording}
+                  >
+                    {activeRecording?.title ?? 'Recording playback'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (activeRecording) {
+                        beginRenameRecording(activeRecording.path);
+                      }
+                    }}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full transition hover:bg-[var(--surface-1)]"
+                    aria-label="Rename recording"
+                    title="Rename recording"
+                    disabled={!activeRecording}
+                  >
                     <EditIcon />
-                  </span>
+                  </button>
+                  {editingRecordingPath === activeRecording?.path ? (
+                    <div className="ml-2 flex items-center gap-2">
+                      <input
+                        ref={editingTitleInputRef}
+                        value={editingRecordingTitle}
+                        onChange={(event) => setEditingRecordingTitle(event.target.value)}
+                        onBlur={() => commitRenameRecording()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            commitRenameRecording();
+                          }
+
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            cancelRenameRecording();
+                          }
+                        }}
+                        className="h-8 w-56 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-1)] px-3 text-sm outline-none"
+                        aria-label="Rename recording title"
+                      />
+                      <button
+                        type="button"
+                        onClick={commitRenameRecording}
+                        className="rounded-[var(--radius)] border border-[var(--border)] px-2.5 py-1.5 text-xs transition hover:bg-[var(--surface-1)]"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelRenameRecording}
+                        className="rounded-[var(--radius)] border border-[var(--border)] px-2.5 py-1.5 text-xs transition hover:bg-[var(--surface-1)]"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
                   <div className="flex items-center gap-2">
                     <button
