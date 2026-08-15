@@ -48,10 +48,6 @@ export class LinuxX11RecorderBackend implements RecorderBackend {
   async getCompatibilityError(): Promise<string | null> {
     const compatibility = await getSystemCompatibility();
 
-    if (!compatibility.ffmpegAvailable) {
-      return compatibility.reason ?? 'FFmpeg is required.';
-    }
-
     if (process.platform !== 'linux') {
       return 'Linux X11 capture is only available on Linux.';
     }
@@ -175,10 +171,6 @@ export class WindowsRecorderBackend implements RecorderBackend {
   async getCompatibilityError(): Promise<string | null> {
     const compatibility = await getSystemCompatibility();
 
-    if (!compatibility.ffmpegAvailable) {
-      return compatibility.reason ?? 'FFmpeg is required.';
-    }
-
     if (process.platform !== 'win32') {
       return 'Windows capture backend is only available on Windows.';
     }
@@ -232,12 +224,6 @@ export class UnsupportedPlatformRecorderBackend implements RecorderBackend {
   }
 
   async getCompatibilityError(): Promise<string | null> {
-    const compatibility = await getSystemCompatibility();
-
-    if (!compatibility.ffmpegAvailable) {
-      return compatibility.reason ?? 'FFmpeg is required.';
-    }
-
     return `This build is currently supported on Linux X11 and Windows only. Detected platform: ${process.platform}.`;
   }
 

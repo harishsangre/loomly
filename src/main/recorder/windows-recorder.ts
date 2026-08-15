@@ -1,4 +1,4 @@
-import type { RecorderOptions, RecordingQuality, Region } from '../../shared/recorder';
+﻿import type { RecorderOptions, RecordingQuality, Region } from '../../shared/recorder';
 import { getSystemCompatibility } from '../ffmpeg/ffmpeg';
 import type { RecorderBackend, RecorderBackendType } from './recorder-backend';
 
@@ -60,7 +60,7 @@ export function buildWindowsSegmentArgs(options: RecorderOptions, outputPath: st
   }
 
   if (cameraEnabled) {
-    args.push('-map', '0:v:0', '-map', '1:v:0', '-map', `${audioInputs.length + (cameraEnabled ? 1 : 0)}:a:0');
+    args.push('-map', '0:v:0', '-map', '1:v:0', '-map', `${audioInputs.length + (cameraEnabled ? 1 : 0)}:a:0`);
   } else {
     args.push('-map', '0:v:0', '-map', `${audioInputs.length > 0 ? 1 : 1}:a:0`);
   }
@@ -145,7 +145,8 @@ export class WindowsRecorderAdapter implements RecorderBackend {
   }
 
   buildRecordingRoot(): string {
-    return process.env.USERPROFILE ? `${process.env.USERPROFILE}\\Videos\\SimpleRecorder` : 'C:\\Videos\\SimpleRecorder';
+    const userProfile = process.env.USERPROFILE || 'C:\\Users\\Default';
+    return `${userProfile}\\Videos\\SimpleRecorder`;
   }
 
   async getCompatibilityError(): Promise<string | null> {

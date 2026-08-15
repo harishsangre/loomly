@@ -3,6 +3,18 @@ import type { CaptureDevices, MicrophoneDevice, RecorderOptions, RecorderStatus,
 declare global {
   interface Window {
     recorder: {
+      getSetupStatus: () => Promise<{
+        ready: boolean;
+        setupComplete: boolean;
+        platformSupported: boolean;
+        ffmpegAvailable: boolean;
+        ffmpegBundleReady: boolean;
+        requiresDownload: boolean;
+        outputDirectory: string;
+        missing: string[];
+      }>;
+      downloadFfmpegBundle: () => Promise<boolean>;
+      completeSetup: () => Promise<boolean>;
       getStatus: () => Promise<RecorderStatus>;
       getMicrophones: () => Promise<MicrophoneDevice[]>;
       getCaptureDevices: () => Promise<CaptureDevices>;

@@ -2,6 +2,18 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { CaptureDevices, RecorderOptions, RecorderStatus, Region, MicrophoneDevice } from '../shared/recorder';
 
 const recorderApi = {
+  getSetupStatus: (): Promise<{
+    ready: boolean;
+    setupComplete: boolean;
+    platformSupported: boolean;
+    ffmpegAvailable: boolean;
+    ffmpegBundleReady: boolean;
+    requiresDownload: boolean;
+    outputDirectory: string;
+    missing: string[];
+  }> => ipcRenderer.invoke('app:get-setup-status'),
+  downloadFfmpegBundle: (): Promise<boolean> => ipcRenderer.invoke('app:download-ffmpeg-bundle'),
+  completeSetup: (): Promise<boolean> => ipcRenderer.invoke('app:complete-setup'),
   getStatus: (): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:get-status'),
   getMicrophones: (): Promise<MicrophoneDevice[]> => ipcRenderer.invoke('recorder:get-microphones'),
   getCaptureDevices: (): Promise<CaptureDevices> => ipcRenderer.invoke('recorder:get-capture-devices'),

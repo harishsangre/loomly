@@ -1,14 +1,18 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { MicrophoneDevice, RecorderOptions, RecorderStatus, RecordingState, Region } from '../../shared/recorder';
 import { getMicrophones } from '../ffmpeg/devices';
-import { isFfmpegAvailable, runProcess } from '../ffmpeg/ffmpeg';
+import { getResolvedFfmpegCommand, isFfmpegAvailable, runProcess } from '../ffmpeg/ffmpeg';
 import { getCurrentRecorderBackend, type RecorderBackend } from './recorder-backend';
 
 type StatusListener = (status: RecorderStatus) => void;
+
+const execFileAsync = promisify(execFile);
 
 function timestampId(date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -206,6 +210,8 @@ export class RecorderService extends EventEmitter {
     try {
       const output = await this.finalizeRecording();
       this.finalVideoPath = output;
+      const actualDurationMs = await this.getMediaDurationMs(output);
+      this.accumulatedMs = actualDurationMs;
       this.state = 'finished';
       this.emitStatus();
       try {
@@ -317,16 +323,24 @@ export class RecorderService extends EventEmitter {
     }
 
     this.segmentCounter += 1;
-    const fileName = `segment-${String(this.segmentCounter).padStart(3, '0')}.mkv`;
-    const segmentPath = path.join(this.sessionDir, fileName);
+    const segmentPath = path.join(this.sessionDir, 'capture.mp4');
     this.activeSegmentPath = segmentPath;
     this.segmentStartedAt = Date.now();
+
+    try {
+      await fs.rm(segmentPath, { force: true });
+    } catch {
+      // Best effort: allow a fresh capture file for the current session.
+    }
 
     const backend = this.backend ?? (await getCurrentRecorderBackend());
     this.backend = backend;
     const args = backend.buildSegmentArgs(this.currentOptions, segmentPath);
-    const ffmpeg = spawn('ffmpeg', args, {
-      stdio: ['ignore', 'ignore', 'pipe']
+    const ffmpegCommand = getResolvedFfmpegCommand();
+    const ffmpeg = spawn(ffmpegCommand.command, args, {
+      env: ffmpegCommand.env,
+      stdio: ['pipe', 'ignore', 'pipe'],
+      windowsHide: true
     });
 
     this.closingIntent = false;
@@ -385,10 +399,34 @@ export class RecorderService extends EventEmitter {
       processRef.once('close', () => resolve());
     });
 
-    processRef.kill('SIGINT');
+    try {
+      if (processRef.stdin && !processRef.stdin.destroyed) {
+        processRef.stdin.write('q');
+        processRef.stdin.end();
+      }
+    } catch {
+      // FFmpeg may already be exiting; continue to the fallback path.
+    }
+
     await Promise.race([
       exitPromise,
-      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('FFmpeg did not shut down cleanly.')), 8000))
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          try {
+            processRef.kill('SIGTERM');
+          } catch {
+            // Windows may not support SIGTERM in the same way as POSIX; a normal hard kill is the last resort.
+          }
+          setTimeout(() => {
+            try {
+              processRef.kill();
+            } catch {
+              // Ignore second-stage shutdown errors.
+            }
+            resolve();
+          }, 500);
+        }, 1500);
+      })
     ]);
 
     if (this.activeSegmentPath) {
@@ -403,30 +441,103 @@ export class RecorderService extends EventEmitter {
       throw new Error('Recording session directory is missing.');
     }
 
-    if (this.segmentFiles.length === 0) {
-      throw new Error('No recording segments were captured.');
-    }
-
-    const concatFile = path.join(this.sessionDir, 'segments.txt');
-    const combinedFile = path.join(this.sessionDir, 'combined.mkv');
     const backend = this.backend ?? (await getCurrentRecorderBackend());
     this.backend = backend;
     const outputDirectory = this.currentOptions?.outputDirectory || backend.buildRecordingRoot();
     const outputFile = path.join(outputDirectory, `recording-${fileNameSafeTime()}.mp4`);
 
     await fs.mkdir(path.dirname(outputFile), { recursive: true });
-    const concatContent = this.segmentFiles.map((segment) => `file '${segment.replace(/'/g, "'\\''")}'`).join(os.EOL);
-    await fs.writeFile(concatFile, `${concatContent}${os.EOL}`, 'utf8');
 
-    await runProcess('ffmpeg', backend.buildConcatArgs(concatFile, combinedFile));
-
-    try {
-      await runProcess('ffmpeg', backend.buildStreamCopyMp4Args(combinedFile, outputFile));
-    } catch {
-      await runProcess('ffmpeg', backend.buildReencodeMp4Args(combinedFile, outputFile, this.currentOptions?.quality));
+    const captureFile = this.activeSegmentPath ?? this.segmentFiles[this.segmentFiles.length - 1] ?? (await this.findLatestCaptureFile());
+    if (!captureFile) {
+      throw new Error('No valid recording was produced.');
     }
 
+    try {
+      await fs.access(captureFile);
+    } catch {
+      throw new Error(`The recording file was not created: ${captureFile}`);
+    }
+
+    await fs.copyFile(captureFile, outputFile);
     return outputFile;
+  }
+
+  private async findLatestCaptureFile(): Promise<string | null> {
+    if (!this.sessionDir) {
+      return null;
+    }
+
+    const entries = await fs.readdir(this.sessionDir);
+    const candidates = entries
+      .filter((entry) => entry.toLowerCase().endsWith('.mp4'))
+      .sort((a, b) => a.localeCompare(b));
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    return path.join(this.sessionDir, candidates[candidates.length - 1]);
+  }
+
+  private async getMediaDurationMs(filePath: string): Promise<number> {
+    const ffmpegCommand = getResolvedFfmpegCommand();
+    const ffprobeDir = path.dirname(ffmpegCommand.command);
+    const ffprobeCommand = process.platform === 'win32'
+      ? path.join(ffprobeDir, 'ffprobe.exe')
+      : path.join(ffprobeDir, 'ffprobe');
+    const probePath = fsSync.existsSync(ffprobeCommand)
+      ? ffprobeCommand
+      : (process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+
+    try {
+      const { stdout } = await execFileAsync(probePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', filePath], {
+        env: ffmpegCommand.env,
+        timeout: 8000
+      });
+      const duration = Number.parseFloat(stdout.trim());
+      return Number.isFinite(duration) ? Math.max(0, duration * 1000) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private async getValidSegments(): Promise<string[]> {
+    const ffmpegCommand = getResolvedFfmpegCommand();
+    const ffprobeDir = path.dirname(ffmpegCommand.command);
+    const ffprobeCommand = process.platform === 'win32'
+      ? path.join(ffprobeDir, 'ffprobe.exe')
+      : path.join(ffprobeDir, 'ffprobe');
+
+    const segmentCandidates = await Promise.all(
+      this.segmentFiles.map(async (segment) => {
+        try {
+          const stats = await fs.stat(segment);
+          if (!stats.size || stats.size < 4096) {
+            return null;
+          }
+
+          const probePath = fsSync.existsSync(ffprobeCommand)
+            ? ffprobeCommand
+            : (process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+
+          try {
+            const { stdout } = await execFileAsync(probePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', segment], {
+              env: ffmpegCommand.env,
+              timeout: 8000
+            });
+            const duration = Number.parseFloat(stdout.trim());
+            return Number.isFinite(duration) && duration > 0.2 ? segment : null;
+          } catch {
+            return segment;
+          }
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    return segmentCandidates.filter((segment): segment is string => Boolean(segment));
   }
 
   private async cleanupTempDirectory(): Promise<void> {

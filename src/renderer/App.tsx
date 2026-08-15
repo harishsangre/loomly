@@ -354,6 +354,20 @@ function shellStateFor(status: RecorderStatus['state']): string {
 
 export default function App() {
   const [status, setStatus] = useState<RecorderStatus>(defaultStatus);
+  const [setupStatus, setSetupStatus] = useState<{
+    ready: boolean;
+    setupComplete: boolean;
+    platformSupported: boolean;
+    ffmpegAvailable: boolean;
+    ffmpegBundleReady: boolean;
+    requiresDownload: boolean;
+    outputDirectory: string;
+    missing: string[];
+  } | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [installingFfmpeg, setInstallingFfmpeg] = useState(false);
+  const [installProgress, setInstallProgress] = useState(0);
   const [microphones, setMicrophones] = useState<MicrophoneDevice[]>(defaultStatus.microphones);
   const [captureMode, setCaptureMode] = useState<CaptureMode>('fullscreen');
   const [selectedMicrophone, setSelectedMicrophone] = useState('default');
@@ -399,15 +413,13 @@ export default function App() {
   const isRecordingScreen = status.state === 'recording' || status.state === 'paused' || status.state === 'processing';
   const environmentIssue =
     status.error ??
-    (status.backendType === 'windows'
-      ? 'Windows capture is still being prepared. Current release supports Linux X11 capture only.'
-      : status.platform !== 'linux'
-        ? 'This MVP only supports Linux.'
-        : status.sessionType?.toLowerCase() === 'wayland'
-          ? 'Wayland screen capture is not supported in this MVP. Please login using an Xorg/X11 session.'
-          : status.sessionType?.toLowerCase() !== 'x11'
-            ? 'This MVP only supports X11 screen capture.'
-            : null);
+    (status.platform === 'linux' && status.sessionType?.toLowerCase() === 'wayland'
+      ? 'Wayland screen capture is not supported in this MVP. Please login using an Xorg/X11 session.'
+      : status.platform === 'linux' && status.sessionType?.toLowerCase() !== 'x11' && status.sessionType !== null
+        ? 'This MVP only supports X11 screen capture.'
+        : status.platform !== 'linux' && status.platform !== 'win32'
+          ? 'This build only supports Linux and Windows.'
+          : null);
   const navigateToPage = (next: Page) => {
     setPage(next);
     pushPage(next);
@@ -415,6 +427,23 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
+
+    void window.recorder.getSetupStatus().then((nextSetupStatus) => {
+      if (!alive) return;
+      setSetupStatus(nextSetupStatus);
+    }).catch(() => {
+      if (!alive) return;
+      setSetupStatus({
+        ready: false,
+        setupComplete: false,
+        platformSupported: false,
+        ffmpegAvailable: false,
+        ffmpegBundleReady: false,
+        requiresDownload: true,
+        outputDirectory: '',
+        missing: ['Setup could not be checked.']
+      });
+    });
 
     void window.recorder.getStatus().then((currentStatus) => {
       if (!alive) return;
@@ -571,6 +600,16 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
+    if (!setupStatus || setupStatus.setupComplete) {
+      return;
+    }
+
+    if (setupStatus.requiresDownload || !setupStatus.ffmpegAvailable) {
+      void handleSetupDownload();
+    }
+  }, [setupStatus?.setupComplete, setupStatus?.requiresDownload, setupStatus?.ffmpegAvailable]);
+
+  useEffect(() => {
     if (!editingRecordingPath) {
       return;
     }
@@ -580,6 +619,67 @@ export default function App() {
       editingTitleInputRef.current?.select();
     }, 0);
   }, [editingRecordingPath]);
+
+  async function handleSetupDownload() {
+    if (installingFfmpeg) {
+      return;
+    }
+
+    setInstallingFfmpeg(true);
+    setSetupBusy(true);
+    setSetupError(null);
+    setInstallProgress(8);
+
+    const progressTimer = window.setInterval(() => {
+      setInstallProgress((current) => {
+        if (current >= 92) {
+          return current;
+        }
+        return Math.min(current + 8, 92);
+      });
+    }, 350);
+
+    try {
+      const ok = await window.recorder.downloadFfmpegBundle();
+      if (!ok) {
+        setSetupError('FFmpeg bundle could not be downloaded.');
+        return;
+      }
+
+      setInstallProgress(100);
+      const nextSetup = await window.recorder.getSetupStatus();
+      setSetupStatus(nextSetup);
+      if (nextSetup.ready) {
+        await window.recorder.completeSetup();
+        setSetupStatus({ ...nextSetup, setupComplete: true });
+        setSetupError(null);
+      }
+    } catch (error) {
+      setSetupError(extractErrorMessage(error));
+    } finally {
+      window.clearInterval(progressTimer);
+      setSetupBusy(false);
+      setInstallingFfmpeg(false);
+    }
+  }
+
+  async function handleSetupContinue() {
+    setSetupBusy(true);
+    setSetupError(null);
+    try {
+      const nextSetup = await window.recorder.getSetupStatus();
+      if (!nextSetup.ready) {
+        setSetupError(nextSetup.missing.join('\n'));
+        return;
+      }
+      await window.recorder.completeSetup();
+      setSetupStatus({ ...nextSetup, ready: true, setupComplete: true });
+    } catch (error) {
+      setSetupError(extractErrorMessage(error));
+    } finally {
+      setSetupBusy(false);
+    }
+  }
 
   async function handleSelectRegion() {
     setLoadingRegion(true);
@@ -1909,6 +2009,49 @@ export default function App() {
           onCancel={() => window.close()}
           onMinimize={() => void window.recorder.minimize()}
         />
+      </main>
+    );
+  }
+
+  if (setupStatus && (!setupStatus.ready || !setupStatus.setupComplete || !setupStatus.platformSupported || !setupStatus.ffmpegAvailable)) {
+    return (
+      <main className="flex h-screen w-screen items-center justify-center bg-[#020b17] p-6 text-slate-50">
+        <div className="w-full max-w-[560px] rounded-[28px] border border-[#1d2c3d] bg-[#0d1726] p-7 shadow-[0_20px_50px_rgba(2,6,23,0.75)]">
+          <div className="mb-6 flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#5b5bd6]/20 text-[#e5e5ff] shadow-inner shadow-[#8b5cf6]/20">
+              <Video className="h-7 w-7" />
+            </div>
+            <div className="tracking-[0.24em] text-[12px] font-medium uppercase text-slate-400">Setting up</div>
+          </div>
+
+          <h1 className="mb-4 text-[30px] font-semibold tracking-[-0.04em] text-white">Installing FFmpeg</h1>
+
+          <div className="mb-4 text-sm text-slate-300">
+            {setupError ? setupError : 'Preparing the system to record your screen.'}
+          </div>
+
+          <div className="h-3 w-full overflow-hidden rounded-full bg-slate-800">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-[#60a5fa] via-[#8b5cf6] to-[#34d399] transition-[width] duration-300 ease-out"
+              style={{ width: `${installProgress}%` }}
+            />
+          </div>
+
+          <div className="mt-4 flex items-center justify-between text-sm text-slate-400">
+            <span>{installingFfmpeg ? 'Downloading and installing FFmpeg...' : 'Checking system requirements...'}</span>
+            <span>{Math.max(0, Math.min(100, installProgress))}%</span>
+          </div>
+
+          {setupError ? (
+            <button
+              type="button"
+              onClick={() => void handleSetupDownload()}
+              className="mt-6 flex w-full items-center justify-center rounded-[14px] border border-[#2b3c4c] bg-[#2a3642] px-4 py-3 text-[18px] font-medium text-slate-100 transition hover:bg-[#313f4f]"
+            >
+              Retry install
+            </button>
+          ) : null}
+        </div>
       </main>
     );
   }

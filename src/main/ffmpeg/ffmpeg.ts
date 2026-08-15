@@ -1,9 +1,68 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import os from 'node:os';
+import { app } from 'electron';
 
 const execFileAsync = promisify(execFile);
+
+export function getUserFfmpegExecutable(): string {
+  return path.join(os.homedir(), 'ffmpeg', 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+}
+
+function getSystemFfmpegCandidates(): string[] {
+  const candidates = new Set<string>();
+  const envPath = process.env.PATH ?? '';
+
+  for (const dir of envPath.split(process.platform === 'win32' ? ';' : ':')) {
+    if (!dir) continue;
+    const exe = path.join(dir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+    if (exe) candidates.add(exe);
+  }
+
+  if (process.platform === 'win32') {
+    candidates.add(path.join(os.homedir(), 'ffmpeg', 'bin', 'ffmpeg.exe'));
+    candidates.add(path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'ffmpeg', 'bin', 'ffmpeg.exe'));
+    candidates.add(path.join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'ffmpeg', 'bin', 'ffmpeg.exe'));
+    candidates.add(path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'WinGet', 'Packages', 'BtbN.FFmpeg', 'ffmpeg.exe'));
+  }
+
+  return [...candidates];
+}
+
+export function getResolvedFfmpegCommand(): { command: string; env: NodeJS.ProcessEnv } {
+  const userExecutable = getUserFfmpegExecutable();
+  const systemCandidates = getSystemFfmpegCandidates();
+  const pathSeparator = process.platform === 'win32' ? ';' : ':';
+
+  for (const candidate of [userExecutable, ...systemCandidates, 'ffmpeg']) {
+    if (!candidate || candidate === 'ffmpeg' ? false : !fs.existsSync(candidate)) {
+      continue;
+    }
+
+    const candidateDir = path.dirname(candidate);
+    return {
+      command: candidate,
+      env: {
+        ...process.env,
+        PATH: `${candidateDir}${pathSeparator}${process.env.PATH ?? ''}`
+      }
+    };
+  }
+
+  return {
+    command: 'ffmpeg',
+    env: process.env
+  };
+}
+
+export function refreshFfmpegPathEnv(): { command: string; env: NodeJS.ProcessEnv } {
+  const resolved = getResolvedFfmpegCommand();
+  process.env.PATH = resolved.env.PATH ?? process.env.PATH ?? '';
+  return resolved;
+}
 
 export type SystemCompatibility = {
   platform: NodeJS.Platform;
@@ -17,8 +76,10 @@ export type SystemCompatibility = {
 };
 
 export async function isFfmpegAvailable(): Promise<boolean> {
+  const { command, env } = getResolvedFfmpegCommand();
+
   try {
-    await execFileAsync('ffmpeg', ['-version']);
+    await execFileAsync(command, ['-version'], { env });
     return true;
   } catch {
     return false;
@@ -36,7 +97,8 @@ export async function getSystemCompatibility(): Promise<SystemCompatibility> {
   let reason: string | null = null;
 
   try {
-    const { stdout } = await execFileAsync('ffmpeg', ['-version']);
+    const { command, env } = getResolvedFfmpegCommand();
+    const { stdout } = await execFileAsync(command, ['-version'], { env });
     ffmpegAvailable = true;
     ffmpegVersion = stdout.split('\n')[0]?.trim() ?? null;
   } catch {
@@ -165,10 +227,12 @@ export async function runProcess(
   args: string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
 ): Promise<void> {
+  const resolved = command === 'ffmpeg' ? getResolvedFfmpegCommand() : { command, env: options.env ?? process.env };
+
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(resolved.command, args, {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env: resolved.env,
       stdio: ['ignore', 'pipe', 'pipe']
     });
 

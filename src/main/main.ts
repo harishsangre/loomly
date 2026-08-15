@@ -1,10 +1,12 @@
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { RecorderService } from './recorder/recorder.service';
 import { registerRecorderIpc } from './ipc/recorder.ipc';
 import type { RecorderStatus } from '../shared/recorder';
 import { getCurrentRecorderBackend } from './recorder/recorder-backend';
+import { checkSetupRequirements, downloadFfmpegBundle, markSetupComplete } from './setup/setup';
 
 let mainWindow: BrowserWindow | null = null;
 let recordingToolbarWindow: BrowserWindow | null = null;
@@ -121,6 +123,21 @@ function updateRecordingChrome(status: RecorderStatus): void {
 }
 
 async function bootstrap(): Promise<void> {
+  const appDataRoot = path.join(process.env.LOCALAPPDATA ?? app.getPath('appData'), 'Simple Recorder');
+  const appDataDir = path.join(appDataRoot, 'AppData');
+  const cacheDir = path.join(appDataRoot, 'Cache');
+  const tempDir = path.join(appDataRoot, 'Temp');
+
+  fs.mkdirSync(appDataDir, { recursive: true });
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  app.commandLine.appendSwitch('disk-cache-dir', cacheDir);
+  app.commandLine.appendSwitch('media-cache-dir', path.join(appDataRoot, 'MediaCache'));
+  app.setPath('userData', appDataDir);
+  app.setPath('cache', cacheDir);
+  app.setPath('temp', tempDir);
+
   await app.whenReady();
   app.setName('Simple Recorder');
 
@@ -163,6 +180,13 @@ async function bootstrap(): Promise<void> {
         mainWindow.focus();
       }
     }
+  });
+
+  ipcMain.handle('app:get-setup-status', async () => checkSetupRequirements());
+  ipcMain.handle('app:download-ffmpeg-bundle', async () => downloadFfmpegBundle());
+  ipcMain.handle('app:complete-setup', async () => {
+    await markSetupComplete();
+    return true;
   });
 
   mainWindow = createMainWindow();

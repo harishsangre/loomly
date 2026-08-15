@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { RecorderOptions, Region, RecorderStatus } from '../../shared/recorder';
-import { runProcess } from '../ffmpeg/ffmpeg';
+import { getResolvedFfmpegCommand, runProcess } from '../ffmpeg/ffmpeg';
 import { getCaptureDevices } from '../ffmpeg/devices';
 import { RecorderService } from '../recorder/recorder.service';
 
@@ -74,23 +74,34 @@ function thumbnailPathFor(videoPath: string): string {
 }
 
 async function getRecordingThumbnail(videoPath: string): Promise<string> {
+  try {
+    await fs.access(videoPath);
+  } catch {
+    return '';
+  }
+
   const thumbnailPath = thumbnailPathFor(videoPath);
+  const ffmpegCommand = getResolvedFfmpegCommand();
 
   try {
     await fs.access(thumbnailPath);
   } catch {
-    await runProcess('ffmpeg', [
-      '-y',
-      '-i',
-      videoPath,
-      '-frames:v',
-      '1',
-      '-vf',
-      'scale=640:-2',
-      '-q:v',
-      '3',
-      thumbnailPath
-    ]);
+    try {
+      await runProcess(ffmpegCommand.command, [
+        '-y',
+        '-i',
+        videoPath,
+        '-frames:v',
+        '1',
+        '-vf',
+        'scale=640:-2',
+        '-q:v',
+        '3',
+        thumbnailPath
+      ], { env: ffmpegCommand.env });
+    } catch {
+      return '';
+    }
   }
 
   const thumbnail = await fs.readFile(thumbnailPath);
