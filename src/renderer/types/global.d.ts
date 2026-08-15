@@ -15,6 +15,7 @@ declare global {
       }>;
       downloadFfmpegBundle: () => Promise<boolean>;
       completeSetup: () => Promise<boolean>;
+      onFfmpegInstallProgress: (callback: (payload: { progress: number; stage: string }) => void) => () => void;
       getStatus: () => Promise<RecorderStatus>;
       getMicrophones: () => Promise<MicrophoneDevice[]>;
       getCaptureDevices: () => Promise<CaptureDevices>;

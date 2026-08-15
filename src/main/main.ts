@@ -183,7 +183,12 @@ async function bootstrap(): Promise<void> {
   });
 
   ipcMain.handle('app:get-setup-status', async () => checkSetupRequirements());
-  ipcMain.handle('app:download-ffmpeg-bundle', async () => downloadFfmpegBundle());
+  ipcMain.handle('app:download-ffmpeg-bundle', async () => {
+    const result = await downloadFfmpegBundle((progress, stage) => {
+      mainWindow?.webContents.send('ffmpeg-install-progress', { progress, stage });
+    });
+    return result;
+  });
   ipcMain.handle('app:complete-setup', async () => {
     await markSetupComplete();
     return true;

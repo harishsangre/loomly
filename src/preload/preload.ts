@@ -14,6 +14,11 @@ const recorderApi = {
   }> => ipcRenderer.invoke('app:get-setup-status'),
   downloadFfmpegBundle: (): Promise<boolean> => ipcRenderer.invoke('app:download-ffmpeg-bundle'),
   completeSetup: (): Promise<boolean> => ipcRenderer.invoke('app:complete-setup'),
+  onFfmpegInstallProgress: (callback: (payload: { progress: number; stage: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { progress: number; stage: string }) => callback(payload);
+    ipcRenderer.on('ffmpeg-install-progress', listener);
+    return () => ipcRenderer.removeListener('ffmpeg-install-progress', listener);
+  },
   getStatus: (): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:get-status'),
   getMicrophones: (): Promise<MicrophoneDevice[]> => ipcRenderer.invoke('recorder:get-microphones'),
   getCaptureDevices: (): Promise<CaptureDevices> => ipcRenderer.invoke('recorder:get-capture-devices'),

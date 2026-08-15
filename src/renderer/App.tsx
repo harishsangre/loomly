@@ -368,6 +368,7 @@ export default function App() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [installingFfmpeg, setInstallingFfmpeg] = useState(false);
   const [installProgress, setInstallProgress] = useState(0);
+  const [installStage, setInstallStage] = useState('Loading...');
   const [microphones, setMicrophones] = useState<MicrophoneDevice[]>(defaultStatus.microphones);
   const [captureMode, setCaptureMode] = useState<CaptureMode>('fullscreen');
   const [selectedMicrophone, setSelectedMicrophone] = useState('default');
@@ -600,14 +601,24 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
-    if (!setupStatus || setupStatus.setupComplete) {
+    const unsubscribe = window.recorder.onFfmpegInstallProgress(({ progress, stage }) => {
+      console.log('[app] FFmpeg install progress update', { progress, stage });
+      setInstallProgress(progress);
+      setInstallStage(stage);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!setupStatus || setupStatus.setupComplete || installingFfmpeg) {
       return;
     }
 
     if (setupStatus.requiresDownload || !setupStatus.ffmpegAvailable) {
-      void handleSetupDownload();
+      console.log('[app] setup is waiting for user action to install');
     }
-  }, [setupStatus?.setupComplete, setupStatus?.requiresDownload, setupStatus?.ffmpegAvailable]);
+  }, [setupStatus?.setupComplete, setupStatus?.requiresDownload, setupStatus?.ffmpegAvailable, installingFfmpeg]);
 
   useEffect(() => {
     if (!editingRecordingPath) {
@@ -628,36 +639,29 @@ export default function App() {
     setInstallingFfmpeg(true);
     setSetupBusy(true);
     setSetupError(null);
-    setInstallProgress(8);
-
-    const progressTimer = window.setInterval(() => {
-      setInstallProgress((current) => {
-        if (current >= 92) {
-          return current;
-        }
-        return Math.min(current + 8, 92);
-      });
-    }, 350);
+    setInstallStage('Checking FFmpeg');
+    setInstallProgress(0);
+    console.log('[app] starting FFmpeg setup download flow');
 
     try {
       const ok = await window.recorder.downloadFfmpegBundle();
+      console.log('[app] FFmpeg setup result', { ok });
       if (!ok) {
-        setSetupError('FFmpeg bundle could not be downloaded.');
+        setSetupError('Install failed. Please check your internet connection and try again.');
         return;
       }
 
-      setInstallProgress(100);
       const nextSetup = await window.recorder.getSetupStatus();
-      setSetupStatus(nextSetup);
-      if (nextSetup.ready) {
-        await window.recorder.completeSetup();
-        setSetupStatus({ ...nextSetup, setupComplete: true });
-        setSetupError(null);
-      }
+      console.log('[app] setup status after install', nextSetup);
+      const finalizedSetup = { ...nextSetup, ready: nextSetup.ready || nextSetup.ffmpegAvailable, setupComplete: true };
+      setSetupStatus(finalizedSetup);
+      await window.recorder.completeSetup();
+      setSetupError(null);
+      setInstallStage('Ready');
+      setInstallProgress(100);
     } catch (error) {
       setSetupError(extractErrorMessage(error));
     } finally {
-      window.clearInterval(progressTimer);
       setSetupBusy(false);
       setInstallingFfmpeg(false);
     }
@@ -2017,28 +2021,15 @@ export default function App() {
     return (
       <main className="flex h-screen w-screen items-center justify-center bg-[#020b17] p-6 text-slate-50">
         <div className="w-full max-w-[560px] rounded-[28px] border border-[#1d2c3d] bg-[#0d1726] p-7 shadow-[0_20px_50px_rgba(2,6,23,0.75)]">
-          <div className="mb-6 flex items-center gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#5b5bd6]/20 text-[#e5e5ff] shadow-inner shadow-[#8b5cf6]/20">
-              <Video className="h-7 w-7" />
-            </div>
-            <div className="tracking-[0.24em] text-[12px] font-medium uppercase text-slate-400">Setting up</div>
-          </div>
-
-          <h1 className="mb-4 text-[30px] font-semibold tracking-[-0.04em] text-white">Installing FFmpeg</h1>
-
-          <div className="mb-4 text-sm text-slate-300">
-            {setupError ? setupError : 'Preparing the system to record your screen.'}
-          </div>
-
-          <div className="h-3 w-full overflow-hidden rounded-full bg-slate-800">
+          <div className="mb-8 h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
             <div
               className="h-full rounded-full bg-gradient-to-r from-[#60a5fa] via-[#8b5cf6] to-[#34d399] transition-[width] duration-300 ease-out"
-              style={{ width: `${installProgress}%` }}
+              style={{ width: `${Math.min(100, Math.max(0, installProgress))}%` }}
             />
           </div>
 
-          <div className="mt-4 flex items-center justify-between text-sm text-slate-400">
-            <span>{installingFfmpeg ? 'Downloading and installing FFmpeg...' : 'Checking system requirements...'}</span>
+          <div className="flex items-center justify-between text-sm text-slate-300">
+            <span>{setupError ? 'Loading failed' : installStage}</span>
             <span>{Math.max(0, Math.min(100, installProgress))}%</span>
           </div>
 
@@ -2048,9 +2039,18 @@ export default function App() {
               onClick={() => void handleSetupDownload()}
               className="mt-6 flex w-full items-center justify-center rounded-[14px] border border-[#2b3c4c] bg-[#2a3642] px-4 py-3 text-[18px] font-medium text-slate-100 transition hover:bg-[#313f4f]"
             >
-              Retry install
+              Retry
             </button>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleSetupDownload()}
+              disabled={installingFfmpeg}
+              className="mt-6 flex w-full items-center justify-center rounded-[14px] border border-[#2b3c4c] bg-[#2a3642] px-4 py-3 text-[18px] font-medium text-slate-100 transition hover:bg-[#313f4f] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {installingFfmpeg ? 'Installing...' : 'Install'}
+            </button>
+          )}
         </div>
       </main>
     );
