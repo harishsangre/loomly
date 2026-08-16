@@ -2,6 +2,8 @@
 import { getSystemCompatibility } from '../ffmpeg/ffmpeg';
 import type { RecorderBackend, RecorderBackendType } from './recorder-backend';
 
+const AUDIO_NOISE_REDUCTION_FILTER = 'afftdn=nf=-25,highpass=f=80,lowpass=f=12000';
+
 function buildWindowsRegionArgs(region?: Region): string[] {
   if (!region) {
     return [];
@@ -77,6 +79,10 @@ function buildWindowsSegmentArgs(options: RecorderOptions, outputPath: string, d
     args.push('-map', '0:v:0', '-map', '1:v:0', '-map', `${audioInputs.length + (cameraEnabled ? 1 : 0)}:a:0`);
   } else {
     args.push('-map', '0:v:0', '-map', `${audioInputs.length > 0 ? 1 : 1}:a:0`);
+  }
+
+  if (audioInputs.length > 0) {
+    args.push('-af', AUDIO_NOISE_REDUCTION_FILTER);
   }
 
   args.push(

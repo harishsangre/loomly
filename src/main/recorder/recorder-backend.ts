@@ -2,6 +2,8 @@ import type { RecorderOptions, RecordingQuality } from '../../shared/recorder';
 import { getSystemCompatibility } from '../ffmpeg/ffmpeg';
 import { buildConcatArgs, buildReencodeMp4Args, buildRecordingRoot, buildSegmentArgs, buildStreamCopyMp4Args, getDisplayName } from './linux-recorder';
 
+const AUDIO_NOISE_REDUCTION_FILTER = 'afftdn=nf=-25,highpass=f=80,lowpass=f=12000';
+
 export type RecorderBackendType = 'linux-x11' | 'windows';
 
 export interface RecorderBackend {
@@ -156,6 +158,10 @@ export class WindowsRecorderBackend implements RecorderBackend {
       args.push('-map', '0:v:0', '-map', `${audioInputs.length > 0 ? 1 : 1}:a:0`);
     }
 
+    if (audioInputs.length > 0) {
+      args.push('-af', AUDIO_NOISE_REDUCTION_FILTER);
+    }
+
     args.push(
       '-c:v',
       'libx264',
@@ -187,9 +193,9 @@ export class WindowsRecorderBackend implements RecorderBackend {
 
   buildReencodeMp4Args(inputPath: string, outputPath: string, quality: RecordingQuality = 'balanced'): string[] {
     const qualitySettings = {
-      high: { crf: '18', preset: 'fast', audioBitrate: '192k' },
-      balanced: { crf: '23', preset: 'veryfast', audioBitrate: '128k' },
-      compact: { crf: '28', preset: 'veryfast', audioBitrate: '96k' }
+      high: { crf: '20', preset: 'medium', audioBitrate: '160k' },
+      balanced: { crf: '24', preset: 'medium', audioBitrate: '128k' },
+      compact: { crf: '28', preset: 'medium', audioBitrate: '96k' }
     }[quality];
 
     return ['-y', '-i', inputPath, '-c:v', 'libx264', '-preset', qualitySettings.preset, '-crf', qualitySettings.crf, '-c:a', 'aac', '-b:a', qualitySettings.audioBitrate, '-movflags', '+faststart', outputPath];
@@ -246,8 +252,8 @@ export class UnsupportedPlatformRecorderBackend implements RecorderBackend {
   }
 
   buildReencodeMp4Args(inputPath: string, outputPath: string, quality: RecordingQuality = 'balanced'): string[] {
-    const crf = quality === 'high' ? '18' : quality === 'compact' ? '28' : '23';
-    return ['-y', '-i', inputPath, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', crf, '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outputPath];
+    const crf = quality === 'high' ? '20' : quality === 'compact' ? '28' : '24';
+    return ['-y', '-i', inputPath, '-c:v', 'libx264', '-preset', 'medium', '-crf', crf, '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outputPath];
   }
 
   getDisplayName(): string {

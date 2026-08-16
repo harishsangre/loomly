@@ -1,6 +1,8 @@
 import path from 'node:path';
 import type { RecorderOptions, RecordingQuality, Region } from '../../shared/recorder';
 
+const AUDIO_NOISE_REDUCTION_FILTER = 'afftdn=nf=-25,highpass=f=80,lowpass=f=12000';
+
 function buildX11Input(display: string, region?: Region): { inputArgs: string[]; inputLabel: string } {
   if (region) {
     return {
@@ -69,13 +71,18 @@ export function buildSegmentArgs(options: RecorderOptions, outputPath: string, d
   }
 
   const videoMap = cameraEnabled ? '[video]' : '0:v:0';
-  const audioMap = audioIndexes.length > 1 ? '[audio]' : `${audioIndexes[0]}:a:0`;
+  const audioMap = '[audio]';
   const filters: string[] = [];
   if (cameraEnabled) {
     filters.push('[1:v]scale=320:-2[camera]', '[0:v][camera]overlay=W-w-24:H-h-24[video]');
   }
   if (audioIndexes.length > 1) {
-    filters.push(`${audioIndexes.map((index) => `[${index}:a]`).join('')}amix=inputs=${audioIndexes.length}:duration=longest:dropout_transition=2[audio]`);
+    filters.push(
+      `${audioIndexes.map((index) => `[${index}:a]`).join('')}amix=inputs=${audioIndexes.length}:duration=longest:dropout_transition=2[mixedaudio]`,
+      `[mixedaudio]${AUDIO_NOISE_REDUCTION_FILTER}[audio]`
+    );
+  } else {
+    filters.push(`[${audioIndexes[0]}:a]${AUDIO_NOISE_REDUCTION_FILTER}[audio]`);
   }
   if (filters.length > 0) {
     args.push('-filter_complex', filters.join(';'));
@@ -133,7 +140,7 @@ export function buildStreamCopyMp4Args(inputPath: string, outputPath: string): s
 }
 
 export function buildReencodeMp4Args(inputPath: string, outputPath: string, quality: RecordingQuality = 'balanced'): string[] {
-  const crf = quality === 'high' ? '18' : quality === 'compact' ? '28' : '23';
+  const crf = quality === 'high' ? '20' : quality === 'compact' ? '28' : '24';
   return [
     '-y',
     '-i',
@@ -141,7 +148,7 @@ export function buildReencodeMp4Args(inputPath: string, outputPath: string, qual
     '-c:v',
     'libx264',
     '-preset',
-    'veryfast',
+    'medium',
     '-crf',
     crf,
     '-c:a',

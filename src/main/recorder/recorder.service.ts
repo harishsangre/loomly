@@ -535,6 +535,25 @@ export class RecorderService extends EventEmitter {
       throw new Error(`The recording file was not created: ${captureFile}`);
     }
 
+    const compressedOutputFile = path.join(outputDirectory, `recording-${fileNameSafeTime()}-compressed.mp4`);
+
+    try {
+      const quality = this.currentOptions?.quality ?? 'balanced';
+      const ffmpegCommand = getResolvedFfmpegCommand();
+      await runProcess(ffmpegCommand.command, backend.buildReencodeMp4Args(captureFile, compressedOutputFile, quality), {
+        env: ffmpegCommand.env
+      });
+
+      const [captureStats, compressedStats] = await Promise.all([fs.stat(captureFile), fs.stat(compressedOutputFile)]);
+      if (compressedStats.size > 0 && compressedStats.size < captureStats.size) {
+        await fs.rename(compressedOutputFile, outputFile);
+        return outputFile;
+      }
+    } catch {
+      // Keep the original recording if the compression pass fails.
+    }
+
+    await fs.rm(compressedOutputFile, { force: true }).catch(() => undefined);
     await fs.copyFile(captureFile, outputFile);
     return outputFile;
   }
