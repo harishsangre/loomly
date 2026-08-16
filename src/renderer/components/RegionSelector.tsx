@@ -31,6 +31,7 @@ export function RegionSelector({
   const [dragging, setDragging] = useState(false);
   const [box, setBox] = useState<DragBox | null>(null);
   const [background, setBackground] = useState<string | null>(null);
+  const pointerIdRef = useRef<number | null>(null);
 
   const region = useMemo(() => (box ? normalizeBox(box) : null), [box]);
 
@@ -104,6 +105,12 @@ export function RegionSelector({
       currentX: point.x,
       currentY: point.y
     });
+    try {
+      (event.currentTarget as Element).setPointerCapture?.(event.pointerId);
+      pointerIdRef.current = event.pointerId;
+    } catch {
+      // ignore
+    }
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
@@ -113,6 +120,15 @@ export function RegionSelector({
   }
 
   function handlePointerUp() {
+    try {
+      const id = pointerIdRef.current;
+      if (id != null) {
+        (stageRef.current as Element)?.releasePointerCapture?.(id);
+      }
+    } catch {
+      // ignore
+    }
+    pointerIdRef.current = null;
     setDragging(false);
   }
 
@@ -172,7 +188,9 @@ export function RegionSelector({
       >
         {displayRegion ? (
           <div
-            className="absolute rounded-2xl border-2 border-cyan-400 bg-cyan-400/8 shadow-[0_0_0_9999px_rgba(15,23,42,0.10)]"
+            // Make the visual selection overlay non-interactive so it doesn't
+            // steal pointer events from the stage while the user is dragging.
+            className="pointer-events-none absolute rounded-2xl border-2 border-cyan-400 bg-cyan-400/8 shadow-[0_0_0_9999px_rgba(15,23,42,0.10)]"
             style={{
               left: displayRegion.x,
               top: displayRegion.y,
@@ -189,7 +207,9 @@ export function RegionSelector({
 
         {displayRegion ? (
           <div
-            className="absolute rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white shadow-xl backdrop-blur-sm"
+            // Tooltip should not capture pointer events during selection so
+            // the user can continue dragging without interruption.
+            className="pointer-events-none absolute rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-sm text-white shadow-xl backdrop-blur-sm"
             style={{
               left: displayRegion.x + Math.min(18, Math.max(0, displayRegion.width - 180)),
               top: displayRegion.y + Math.min(18, Math.max(0, displayRegion.height - 90))

@@ -109,7 +109,24 @@ export class WindowsRecorderBackend implements RecorderBackend {
     const args = ['-y', '-f', 'gdigrab', '-framerate', String(frameRate), '-i', 'desktop'];
 
     if (options.captureMode === 'region' && options.region) {
-      args.splice(4, 0, '-offset_x', String(Math.max(0, Math.floor(options.region.x))), '-offset_y', String(Math.max(0, Math.floor(options.region.y))), '-video_size', `${Math.max(1, Math.floor(options.region.width))}x${Math.max(1, Math.floor(options.region.height))}`);
+      // Insert region-specific gdigrab options before the input specifier (`-i`).
+      // Previously this used a hard-coded splice index which could end up
+      // breaking the argument order (frame rate must follow `-framerate`).
+      const insertIndex = Math.max(0, args.indexOf('-i'));
+      // Ensure video_size dimensions are even numbers (required by libx264).
+      const rawWidth = Math.max(1, Math.floor(options.region.width));
+      const rawHeight = Math.max(1, Math.floor(options.region.height));
+      const evenWidth = rawWidth % 2 === 0 ? rawWidth : Math.max(1, rawWidth - 1);
+      const evenHeight = rawHeight % 2 === 0 ? rawHeight : Math.max(1, rawHeight - 1);
+      const offsetArgs = [
+        '-offset_x',
+        String(Math.max(0, Math.floor(options.region.x))),
+        '-offset_y',
+        String(Math.max(0, Math.floor(options.region.y))),
+        '-video_size',
+        `${evenWidth}x${evenHeight}`
+      ];
+      args.splice(insertIndex, 0, ...offsetArgs);
     }
 
     const cameraEnabled = Boolean(options.camera && options.camera !== 'none');

@@ -246,7 +246,7 @@ function buildRecordingItem(path: string, elapsedMs: number, index: number): Rec
 }
 
 function buildVideoPosterDataUri(item: RecordingItem | null): string {
-  const title = item?.title ?? 'Local Zoom';
+  const title = item?.title ?? 'Local Loom';
   const subtitle = item ? item.meta : 'Finished recording';
   const svg = `
     <svg width="1280" height="720" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg">
@@ -470,12 +470,28 @@ export default function App() {
       setOutputDirectory((current) => current || devices.defaultOutputDirectory);
     });
 
+    const handleWindowFocus = () => {
+      // Re-query microphones when the window regains focus so newly plugged
+      // devices become available without restarting the app.
+      void window.recorder.getMicrophones().then((devices) => {
+        if (!alive) return;
+        setMicrophones(devices);
+      });
+    };
+    window.addEventListener('focus', handleWindowFocus);
+
     const unsubscribe = window.recorder.onStatusUpdated((nextStatus) => {
       setStatus(nextStatus);
-      setCaptureMode(nextStatus.captureMode);
       setSelectedMicrophone(nextStatus.microphone);
       setMicrophones(nextStatus.microphones);
-      setSelectedRegion((current) => nextStatus.region ?? (nextStatus.captureMode === 'fullscreen' ? null : current));
+      // Only update capture mode / region when the main process reports a
+      // concrete region. This prevents the main window restoring to fullscreen
+      // (and emitting a status without a region) from wiping out a user
+      // selection made via the overlay.
+      if (nextStatus.region) {
+        setCaptureMode(nextStatus.captureMode);
+        setSelectedRegion(nextStatus.region);
+      }
       if (nextStatus.finalVideoPath) {
         setSelectedVideoPath(nextStatus.finalVideoPath);
       } else if (nextStatus.state !== 'finished') {
@@ -486,6 +502,7 @@ export default function App() {
     return () => {
       alive = false;
       unsubscribe();
+      window.removeEventListener('focus', handleWindowFocus);
     };
   }, []);
 
@@ -763,6 +780,24 @@ export default function App() {
       }
       setSelectedVideoPath(null);
       navigateToPage('library');
+      // Defensive: if user intends a region capture but no region is selected
+      // (was cleared or never set), open the region selector so we don't
+      // attempt to start FFmpeg with an empty/invalid region.
+      if (captureMode === 'region' && !selectedRegion) {
+        try {
+          const region = await window.recorder.selectRegion();
+          if (region) {
+            setSelectedRegion(region);
+          } else {
+            // User cancelled selection; abort start.
+            return;
+          }
+        } catch (err) {
+          setStatus((current) => ({ ...current, error: extractErrorMessage(err) }));
+          return;
+        }
+      }
+
       const next = await window.recorder.start({
         captureMode,
         microphone: selectedMicrophone,

@@ -4,6 +4,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFile, spawn } from 'node:child_process';
+import { screen } from 'electron';
 import { promisify } from 'node:util';
 import type { MicrophoneDevice, RecorderOptions, RecorderStatus, RecordingState, Region } from '../../shared/recorder';
 import { getMicrophones } from '../ffmpeg/devices';
@@ -346,6 +347,26 @@ export class RecorderService extends EventEmitter {
         microphone: useDefaultMic ? 'default' : this.resolveMicrophoneId(this.currentOptions!.microphone)
       };
 
+      // If a region was selected, convert from CSS/DIP coordinates to
+      // physical pixels using the display scale factor so gdigrab receives
+      // the correct offsets and video_size. This avoids 0x0 captures when
+      // running on high-DPI displays.
+      if (options.captureMode === 'region' && options.region) {
+        try {
+          const point = { x: Math.round(options.region.x), y: Math.round(options.region.y) };
+          const display = screen.getDisplayNearestPoint(point);
+          const scale = display.scaleFactor ?? 1;
+          options.region = {
+            x: Math.round(options.region.x * scale),
+            y: Math.round(options.region.y * scale),
+            width: Math.max(1, Math.round(options.region.width * scale)),
+            height: Math.max(1, Math.round(options.region.height * scale))
+          };
+        } catch {
+          // if anything goes wrong, fall back to the original region values
+        }
+      }
+
       const args = backend.buildSegmentArgs(options, segmentPath);
       const ffmpegCommand = getResolvedFfmpegCommand();
       const ffmpeg = spawn(ffmpegCommand.command, args, {
@@ -353,6 +374,17 @@ export class RecorderService extends EventEmitter {
         stdio: ['pipe', 'ignore', 'pipe'],
         windowsHide: true
       });
+
+      // Create a small debug log in the session directory so we can inspect
+      // the exact ffmpeg command, args and stderr output when troubleshooting
+      // why a capture file wasn't produced.
+      const ffmpegLogPath = this.sessionDir ? path.join(this.sessionDir, 'ffmpeg.log') : null;
+      if (ffmpegLogPath) {
+        void fs.appendFile(
+          ffmpegLogPath,
+          `\n\n=== FFmpeg start ${new Date().toISOString()} ===\nCommand: ${ffmpegCommand.command}\nArgs: ${args.join(' ')}\nPATH: ${ffmpegCommand.env.PATH}\n\n`
+        ).catch(() => {});
+      }
 
       this.closingIntent = false;
       this.activeProcess = ffmpeg;
@@ -367,6 +399,9 @@ export class RecorderService extends EventEmitter {
         stderrOutput += text;
         if (/Input #[0-9]+, pulse/.test(text) || /x11grab/.test(text)) {
           return;
+        }
+        if (ffmpegLogPath) {
+          void fs.appendFile(ffmpegLogPath, text).catch(() => {});
         }
       });
 
@@ -393,6 +428,13 @@ export class RecorderService extends EventEmitter {
           .filter(Boolean)
           .slice(-6)
           .join(' ');
+
+        if (ffmpegLogPath) {
+          void fs.appendFile(
+            ffmpegLogPath,
+            `\n=== FFmpeg exit ${new Date().toISOString()} ===\ncode: ${code} signal: ${signal}\nLast stderr snippet:\n${details}\n\nFull stderr:\n${stderrOutput}\n`
+          ).catch(() => {});
+        }
 
         const inputError = /Error opening input|I\/O error|Cannot find a match for the device name|Could not open|Failed to set up|No such file or directory/i.test(details);
         const isWindowsMicFailure = process.platform === 'win32' && inputError && options.microphone !== 'default';
