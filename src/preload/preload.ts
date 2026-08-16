@@ -29,6 +29,8 @@ const recorderApi = {
     ipcRenderer.invoke('recorder:get-recording-thumbnail', filePath),
   getRecordingDuration: (filePath: string): Promise<number> => ipcRenderer.invoke('recorder:get-recording-duration', filePath),
   getRecordingCaptions: (filePath: string): Promise<string> => ipcRenderer.invoke('recorder:get-recording-captions', filePath),
+  generateRecordingCaptions: (filePath: string): Promise<string> =>
+    ipcRenderer.invoke('recorder:generate-recording-captions', filePath),
   recordingExists: (filePath: string): Promise<boolean> => ipcRenderer.invoke('recorder:recording-exists', filePath),
   deleteRecording: (filePath: string): Promise<boolean> => ipcRenderer.invoke('recorder:delete-recording', filePath),
   start: (options: RecorderOptions): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:start', options),

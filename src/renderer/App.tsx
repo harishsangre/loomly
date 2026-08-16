@@ -416,6 +416,8 @@ export default function App() {
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
+  const [captionsGenerating, setCaptionsGenerating] = useState(false);
+  const [captionsError, setCaptionsError] = useState<string | null>(null);
   const [showPlaybackPoster, setShowPlaybackPoster] = useState(true);
   const [loadingRegion, setLoadingRegion] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
@@ -686,6 +688,7 @@ export default function App() {
     let objectUrl: string | null = null;
 
     setCaptionsUrl(null);
+    setCaptionsError(null);
 
     if (!currentVideoPath) {
       return;
@@ -957,6 +960,26 @@ export default function App() {
       window.setTimeout(() => setShareFeedback(null), 1400);
     } catch {
       setStatus((current) => ({ ...current, error: 'Unable to copy the recording path.' }));
+    }
+  }
+
+  async function handleGenerateCaptions() {
+    if (!currentVideoPath || captionsGenerating) {
+      return;
+    }
+
+    setCaptionsGenerating(true);
+    setCaptionsError(null);
+    try {
+      const captions = await window.recorder.generateRecordingCaptions(currentVideoPath);
+      if (captionsUrl) {
+        URL.revokeObjectURL(captionsUrl);
+      }
+      setCaptionsUrl(URL.createObjectURL(new Blob([captions], { type: 'text/vtt' })));
+    } catch (error) {
+      setCaptionsError(extractErrorMessage(error));
+    } finally {
+      setCaptionsGenerating(false);
     }
   }
 
@@ -2053,6 +2076,15 @@ export default function App() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => void handleGenerateCaptions()}
+                    disabled={!currentVideoPath || captionsGenerating}
+                    className="flex items-center gap-1.5 rounded-[var(--radius)] border border-[var(--border)] px-2.5 py-1.5 text-xs transition hover:bg-[var(--surface-1)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <ListVideo className="h-3.5 w-3.5" />
+                    {captionsGenerating ? 'Generating...' : captionsUrl ? 'Captions ready' : 'Generate captions'}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => void handleShare()}
                     className="flex items-center gap-1.5 rounded-[var(--radius)] bg-[var(--fill-primary)] px-3 py-1.5 text-xs font-medium text-[var(--on-primary)]"
                   >
@@ -2102,6 +2134,12 @@ export default function App() {
                       </div>
                     </div>
                   )}
+
+                  {captionsError ? (
+                    <div className="mt-3 rounded-[var(--radius)] border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      {captionsError}
+                    </div>
+                  ) : null}
 
                   <div className="mt-3 flex flex-wrap items-center gap-3.5">
                     <div className="flex items-center gap-1.5">

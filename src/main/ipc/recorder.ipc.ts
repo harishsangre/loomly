@@ -1,6 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, screen } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -82,6 +83,215 @@ function captionsPathFor(videoPath: string): string {
   return path.join(parsed.dir, `${parsed.name}.vtt`);
 }
 
+function getWhisperExecutableName(): string {
+  return process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
+}
+
+function getWhisperResourceRoots(): string[] {
+  const roots = [
+    path.join(process.resourcesPath ?? '', 'whisper'),
+    path.join(process.cwd(), 'resources', 'whisper'),
+    path.join(os.homedir(), '.loomly', 'whisper')
+  ];
+
+  return [...new Set(roots.filter(Boolean))];
+}
+
+function getUserWhisperRoot(): string {
+  return path.join(os.homedir(), '.loomly', 'whisper');
+}
+
+function getWhisperPlatformDir(): 'win' | 'linux' | 'mac' {
+  return process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
+}
+
+function getWhisperModelDownloadUrl(): string {
+  return 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin';
+}
+
+function getWhisperReleasePlatformTerms(): string[] {
+  if (process.platform === 'win32') return ['win', 'windows'];
+  if (process.platform === 'darwin') return ['mac', 'macos', 'darwin'];
+  return ['linux'];
+}
+
+function getWhisperReleaseArchTerms(): string[] {
+  if (process.arch === 'arm64') return ['arm64', 'aarch64'];
+  return ['x64', 'x86_64', 'amd64'];
+}
+
+async function downloadUrlToPath(url: string, destination: string): Promise<void> {
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'Local-Zoom'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Download failed with status ${response.status}.`);
+  }
+
+  const data = Buffer.from(await response.arrayBuffer());
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.writeFile(destination, data);
+}
+
+async function listFilesRecursive(root: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const entryPath = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        return listFilesRecursive(entryPath);
+      }
+      return [entryPath];
+    })
+  );
+
+  return nested.flat();
+}
+
+async function findWhisperReleaseAssetUrl(): Promise<string> {
+  const response = await fetch('https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest', {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'Local-Zoom'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Could not check whisper.cpp releases. GitHub returned ${response.status}.`);
+  }
+
+  const release = await response.json() as {
+    assets?: Array<{ name?: string; browser_download_url?: string }>;
+  };
+  const platformTerms = getWhisperReleasePlatformTerms();
+  const archTerms = getWhisperReleaseArchTerms();
+  const archiveExtensions = process.platform === 'win32' ? ['.zip'] : ['.zip', '.tar.gz', '.tgz'];
+  const asset = release.assets
+    ?.filter((candidate) => candidate.name && candidate.browser_download_url)
+    .map((candidate) => ({ ...candidate, normalizedName: candidate.name!.toLowerCase() }))
+    .find((candidate) =>
+      archiveExtensions.some((extension) => candidate.normalizedName.endsWith(extension)) &&
+      platformTerms.some((term) => candidate.normalizedName.includes(term)) &&
+      archTerms.some((term) => candidate.normalizedName.includes(term)) &&
+      !candidate.normalizedName.includes('server')
+    );
+
+  if (!asset?.browser_download_url) {
+    throw new Error('No compatible whisper.cpp release asset was found for this system.');
+  }
+
+  return asset.browser_download_url;
+}
+
+async function extractWhisperArchive(archivePath: string, destination: string): Promise<void> {
+  await fs.rm(destination, { recursive: true, force: true });
+  await fs.mkdir(destination, { recursive: true });
+
+  if (archivePath.toLowerCase().endsWith('.zip')) {
+    if (process.platform === 'win32') {
+      await execFileAsync('powershell', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${destination.replace(/'/g, "''")}' -Force`
+      ]);
+      return;
+    }
+
+    await execFileAsync('unzip', ['-o', archivePath, '-d', destination]);
+    return;
+  }
+
+  await execFileAsync('tar', ['-xf', archivePath, '-C', destination]);
+}
+
+async function installWhisperRuntime(): Promise<void> {
+  const root = getUserWhisperRoot();
+  const platformDir = getWhisperPlatformDir();
+  const binDir = path.join(root, platformDir);
+  const modelDir = path.join(root, 'models');
+  const executableName = getWhisperExecutableName();
+  const executablePath = path.join(binDir, executableName);
+  const modelPath = path.join(modelDir, 'ggml-base.en-q5_1.bin');
+
+  try {
+    await fs.access(executablePath);
+  } catch {
+    const assetUrl = await findWhisperReleaseAssetUrl();
+    const archiveName = new URL(assetUrl).pathname.split('/').pop() ?? 'whisper-runtime.zip';
+    const archivePath = path.join(os.tmpdir(), archiveName);
+    const extractDir = path.join(os.tmpdir(), `local-zoom-whisper-${Date.now()}`);
+
+    await downloadUrlToPath(assetUrl, archivePath);
+    await extractWhisperArchive(archivePath, extractDir);
+
+    const extractedFiles = await listFilesRecursive(extractDir);
+    const extractedExecutable = extractedFiles.find((file) => path.basename(file).toLowerCase() === executableName.toLowerCase());
+    if (!extractedExecutable) {
+      throw new Error(`${executableName} was not found in the downloaded whisper.cpp archive.`);
+    }
+
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.copyFile(extractedExecutable, executablePath);
+    if (process.platform !== 'win32') {
+      await fs.chmod(executablePath, 0o755).catch(() => undefined);
+    }
+    await fs.rm(extractDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(archivePath, { force: true }).catch(() => undefined);
+  }
+
+  try {
+    await fs.access(modelPath);
+  } catch {
+    await downloadUrlToPath(getWhisperModelDownloadUrl(), modelPath);
+  }
+}
+
+async function findFirstExistingPath(candidates: string[]): Promise<string | null> {
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // keep checking other candidates
+    }
+  }
+
+  return null;
+}
+
+async function resolveWhisperRuntime(): Promise<{ executable: string; model: string }> {
+  const executableName = getWhisperExecutableName();
+  const platformDir = getWhisperPlatformDir();
+  const roots = getWhisperResourceRoots();
+  const executable = await findFirstExistingPath([
+    ...roots.map((root) => path.join(root, platformDir, executableName)),
+    ...roots.map((root) => path.join(root, 'bin', executableName)),
+    ...roots.map((root) => path.join(root, executableName))
+  ]);
+  const model = await findFirstExistingPath([
+    ...roots.map((root) => path.join(root, 'models', 'ggml-base.en-q5_1.bin')),
+    ...roots.map((root) => path.join(root, 'models', 'ggml-base.en-q5_0.bin')),
+    ...roots.map((root) => path.join(root, 'models', 'ggml-base.en.bin')),
+    ...roots.map((root) => path.join(root, 'models', 'ggml-small.en-q5_0.bin')),
+    ...roots.map((root) => path.join(root, 'models', 'ggml-small.en.bin'))
+  ]);
+
+  if (!executable) {
+    throw new Error(`whisper.cpp is missing. Add ${executableName} under resources/whisper/${platformDir}/ or ~/.loomly/whisper/${platformDir}/.`);
+  }
+
+  if (!model) {
+    throw new Error('Whisper model is missing. Add ggml-base.en-q5_0.bin under resources/whisper/models/ or ~/.loomly/whisper/models/.');
+  }
+
+  return { executable, model };
+}
+
 async function getRecordingThumbnail(videoPath: string): Promise<string> {
   try {
     await fs.access(videoPath);
@@ -148,6 +358,67 @@ async function getRecordingDurationMs(videoPath: string): Promise<number> {
   }
 }
 
+async function generateRecordingCaptions(videoPath: string): Promise<string> {
+  try {
+    await fs.access(videoPath);
+  } catch {
+    throw new Error('Recording file was not found.');
+  }
+
+  let runtime: { executable: string; model: string };
+  try {
+    runtime = await resolveWhisperRuntime();
+  } catch {
+    try {
+      await installWhisperRuntime();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not install whisper.cpp automatically. ${message}`);
+    }
+    runtime = await resolveWhisperRuntime();
+  }
+
+  const { executable, model } = runtime;
+  const captionPath = captionsPathFor(videoPath);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'local-zoom-captions-'));
+  const audioPath = path.join(tempDir, 'audio.wav');
+  const captionBasePath = path.join(tempDir, 'captions');
+  const generatedCaptionPath = `${captionBasePath}.vtt`;
+  const ffmpegCommand = getResolvedFfmpegCommand();
+
+  try {
+    await runProcess(ffmpegCommand.command, [
+      '-y',
+      '-i',
+      videoPath,
+      '-vn',
+      '-ar',
+      '16000',
+      '-ac',
+      '1',
+      '-c:a',
+      'pcm_s16le',
+      audioPath
+    ], { env: ffmpegCommand.env });
+
+    await runProcess(executable, [
+      '-m',
+      model,
+      '-f',
+      audioPath,
+      '-ovtt',
+      '-of',
+      captionBasePath
+    ]);
+
+    const captions = await fs.readFile(generatedCaptionPath, 'utf8');
+    await fs.writeFile(captionPath, captions, 'utf8');
+    return captions;
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export function registerRecorderIpc(args: {
   service: RecorderService;
   onStatus: (status: RecorderStatus) => void;
@@ -196,6 +467,10 @@ export function registerRecorderIpc(args: {
     } catch {
       return '';
     }
+  });
+
+  ipcMain.handle('recorder:generate-recording-captions', async (_event, filePath: string) => {
+    return generateRecordingCaptions(filePath);
   });
 
   ipcMain.handle('recorder:recording-exists', async (_event, filePath: string) => {
