@@ -23,6 +23,7 @@ declare global {
       readRecording: (filePath: string) => Promise<ArrayBuffer>;
       getRecordingThumbnail: (filePath: string) => Promise<string>;
       getRecordingDuration: (filePath: string) => Promise<number>;
+      getRecordingCaptions: (filePath: string) => Promise<string>;
       recordingExists: (filePath: string) => Promise<boolean>;
       deleteRecording: (filePath: string) => Promise<boolean>;
       start: (options: RecorderOptions) => Promise<RecorderStatus>;

@@ -415,6 +415,7 @@ export default function App() {
   const [recordingThumbnails, setRecordingThumbnails] = useState<Record<string, string>>({});
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
   const [showPlaybackPoster, setShowPlaybackPoster] = useState(true);
   const [loadingRegion, setLoadingRegion] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
@@ -671,6 +672,33 @@ export default function App() {
         if (!active) return;
         setPlaybackError(extractErrorMessage(error));
       });
+
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [currentVideoPath]);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+
+    setCaptionsUrl(null);
+
+    if (!currentVideoPath) {
+      return;
+    }
+
+    void window.recorder
+      .getRecordingCaptions(currentVideoPath)
+      .then((captions) => {
+        if (!active || !captions.trim()) return;
+        objectUrl = URL.createObjectURL(new Blob([captions], { type: 'text/vtt' }));
+        setCaptionsUrl(objectUrl);
+      })
+      .catch(() => undefined);
 
     return () => {
       active = false;
@@ -2014,10 +2042,10 @@ export default function App() {
                     >
                       <X className="h-4 w-4" style={{ color: 'var(--text-secondary)' }} />
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleDownload}
-                      disabled={!playbackUrl}
+                  <button
+                    type="button"
+                    onClick={handleDownload}
+                    disabled={!playbackUrl}
                     className="flex items-center gap-1.5 rounded-[var(--radius)] border border-[var(--border)] px-2.5 py-1.5 text-xs transition hover:bg-[var(--surface-1)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Download className="h-3.5 w-3.5" />
@@ -2057,7 +2085,9 @@ export default function App() {
                         preload="metadata"
                         playsInline
                         onPlay={() => setShowPlaybackPoster(false)}
-                      />
+                      >
+                        {captionsUrl ? <track kind="captions" src={captionsUrl} srcLang="en" label="English" default /> : null}
+                      </video>
                     </div>
                   ) : (
                     <div className="flex min-h-[320px] items-center justify-center rounded-[var(--radius)] border border-dashed border-[var(--border-strong)] bg-[var(--surface-1)] p-6 text-center">

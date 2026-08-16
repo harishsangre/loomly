@@ -77,6 +77,11 @@ function thumbnailPathFor(videoPath: string): string {
   return path.join(parsed.dir, `${parsed.name}.thumbnail.jpg`);
 }
 
+function captionsPathFor(videoPath: string): string {
+  const parsed = path.parse(videoPath);
+  return path.join(parsed.dir, `${parsed.name}.vtt`);
+}
+
 async function getRecordingThumbnail(videoPath: string): Promise<string> {
   try {
     await fs.access(videoPath);
@@ -185,6 +190,14 @@ export function registerRecorderIpc(args: {
     return getRecordingDurationMs(filePath);
   });
 
+  ipcMain.handle('recorder:get-recording-captions', async (_event, filePath: string) => {
+    try {
+      return await fs.readFile(captionsPathFor(filePath), 'utf8');
+    } catch {
+      return '';
+    }
+  });
+
   ipcMain.handle('recorder:recording-exists', async (_event, filePath: string) => {
     try {
       await fs.access(filePath);
@@ -199,6 +212,7 @@ export function registerRecorderIpc(args: {
       await fs.access(filePath);
       await fs.unlink(filePath);
       await fs.unlink(thumbnailPathFor(filePath)).catch(() => undefined);
+      await fs.unlink(captionsPathFor(filePath)).catch(() => undefined);
       return true;
     } catch {
       return false;
