@@ -75,6 +75,24 @@ export class LinuxX11RecorderBackend implements RecorderBackend {
   }
 }
 
+function formatWindowsDshowSource(type: 'audio' | 'video', source: string): string {
+  const cleaned = (source ?? '')
+    .trim()
+    .replace(/^audio=|^video=/i, '')
+    .replace(/^"|"$/g, '')
+    .replace(/"/g, '');
+
+  if (!cleaned || cleaned === 'default' || cleaned === 'none') {
+    return `${type}=default`;
+  }
+
+  // When spawning ffmpeg directly we must not include shell-style quoting
+  // characters in the argument values. Return the device assignment without
+  // surrounding quotes so the spawn argv element contains the plain device
+  // name (which may include spaces) and ffmpeg receives the correct value.
+  return `${type}=${cleaned}`;
+}
+
 export class WindowsRecorderBackend implements RecorderBackend {
   readonly type: RecorderBackendType = 'windows';
   readonly enabled = true;
@@ -96,15 +114,15 @@ export class WindowsRecorderBackend implements RecorderBackend {
 
     const cameraEnabled = Boolean(options.camera && options.camera !== 'none');
     if (cameraEnabled) {
-      args.push('-thread_queue_size', '1024', '-f', 'dshow', '-i', options.camera);
+      args.push('-thread_queue_size', '1024', '-f', 'dshow', '-i', formatWindowsDshowSource('video', options.camera));
     }
 
     const audioInputs: string[] = [];
     if (options.microphone && options.microphone !== 'none' && options.microphone !== 'default') {
-      audioInputs.push(options.microphone);
+      audioInputs.push(formatWindowsDshowSource('audio', options.microphone));
     }
     if (options.systemAudio && options.systemAudio !== 'none' && options.systemAudio !== 'default') {
-      audioInputs.push(options.systemAudio);
+      audioInputs.push(formatWindowsDshowSource('audio', options.systemAudio));
     }
 
     if (audioInputs.length === 0) {

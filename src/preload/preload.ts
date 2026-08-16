@@ -27,6 +27,8 @@ const recorderApi = {
   readRecording: (filePath: string): Promise<ArrayBuffer> => ipcRenderer.invoke('recorder:read-recording', filePath),
   getRecordingThumbnail: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('recorder:get-recording-thumbnail', filePath),
+  recordingExists: (filePath: string): Promise<boolean> => ipcRenderer.invoke('recorder:recording-exists', filePath),
+  deleteRecording: (filePath: string): Promise<boolean> => ipcRenderer.invoke('recorder:delete-recording', filePath),
   start: (options: RecorderOptions): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:start', options),
   pause: (): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:pause'),
   resume: (): Promise<RecorderStatus> => ipcRenderer.invoke('recorder:resume'),

@@ -621,6 +621,35 @@ export default function App() {
   }, [setupStatus?.setupComplete, setupStatus?.requiresDownload, setupStatus?.ffmpegAvailable, installingFfmpeg]);
 
   useEffect(() => {
+    let active = true;
+
+    const stalePaths = recordings
+      .map((item) => item.path)
+      .filter((path) => path.trim().length > 0);
+
+    if (!stalePaths.length) {
+      return;
+    }
+
+    void Promise.all(stalePaths.map(async (path) => {
+      try {
+        const exists = await window.recorder.recordingExists(path);
+        return [path, exists] as const;
+      } catch {
+        return [path, false] as const;
+      }
+    })).then((entries) => {
+      if (!active) return;
+      const validPaths = new Set(entries.filter(([, exists]) => exists).map(([path]) => path));
+      setRecordings((current) => current.filter((item) => validPaths.has(item.path)));
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!editingRecordingPath) {
       return;
     }
@@ -820,7 +849,25 @@ export default function App() {
   }
 
   function toggleTrash(path: string) {
-    updateRecording(path, (item) => ({ ...item, trashed: !item.trashed }));
+    const current = recordings.find((item) => item.path === path);
+    if (!current) {
+      return;
+    }
+
+    if (current.trashed) {
+      updateRecording(path, (item) => ({ ...item, trashed: false }));
+      return;
+    }
+
+    void window.recorder.deleteRecording(path)
+      .then((deleted) => {
+        if (deleted) {
+          setRecordings((items) => items.filter((item) => item.path !== path));
+        }
+      })
+      .catch((error) => {
+        setStatus((currentStatus) => ({ ...currentStatus, error: extractErrorMessage(error) }));
+      });
   }
 
   function beginRenameRecording(path: string) {

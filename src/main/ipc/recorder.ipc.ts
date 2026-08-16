@@ -146,6 +146,25 @@ export function registerRecorderIpc(args: {
     return getRecordingThumbnail(filePath);
   });
 
+  ipcMain.handle('recorder:recording-exists', async (_event, filePath: string) => {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle('recorder:delete-recording', async (_event, filePath: string) => {
+    try {
+      await fs.access(filePath);
+      await fs.unlink(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
   ipcMain.handle('recorder:start', async (_event, options: RecorderOptions) => {
     const status = await args.service.start(options);
     args.onStatus(status);

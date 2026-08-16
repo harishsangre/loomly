@@ -29,7 +29,21 @@ function getWindowsQualitySettings(quality: RecordingQuality = 'balanced') {
   }
 }
 
-export function buildWindowsSegmentArgs(options: RecorderOptions, outputPath: string, display: string): string[] {
+export function formatWindowsDshowSource(type: 'audio' | 'video', source: string): string {
+  const cleaned = (source ?? '')
+    .trim()
+    .replace(/^audio=|^video=/i, '')
+    .replace(/^"|"$/g, '')
+    .replace(/"/g, '');
+
+  if (!cleaned || cleaned === 'default' || cleaned === 'none') {
+    return `${type}=default`;
+  }
+
+  return `${type}="${cleaned}"`;
+}
+
+function buildWindowsSegmentArgs(options: RecorderOptions, outputPath: string, display: string): string[] {
   const frameRate = options.frameRate ?? 30;
   const quality = getWindowsQualitySettings(options.quality ?? 'balanced');
   const args = ['-y', '-f', 'gdigrab', '-framerate', String(frameRate), '-i', display];
@@ -40,15 +54,15 @@ export function buildWindowsSegmentArgs(options: RecorderOptions, outputPath: st
 
   const cameraEnabled = Boolean(options.camera && options.camera !== 'none');
   if (cameraEnabled) {
-    args.push('-thread_queue_size', '1024', '-f', 'dshow', '-i', options.camera);
+    args.push('-thread_queue_size', '1024', '-f', 'dshow', '-i', formatWindowsDshowSource('video', options.camera));
   }
 
   const audioInputs: string[] = [];
   if (options.microphone && options.microphone !== 'none' && options.microphone !== 'default') {
-    audioInputs.push(options.microphone);
+    audioInputs.push(formatWindowsDshowSource('audio', options.microphone));
   }
   if (options.systemAudio && options.systemAudio !== 'none' && options.systemAudio !== 'default') {
-    audioInputs.push(options.systemAudio);
+    audioInputs.push(formatWindowsDshowSource('audio', options.systemAudio));
   }
 
   if (audioInputs.length === 0) {

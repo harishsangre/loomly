@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CaptureDevice, CaptureDevices, MicrophoneDevice } from '../../shared/recorder';
 import { buildRecordingRoot } from '../recorder/linux-recorder';
+import { getResolvedFfmpegCommand } from './ffmpeg';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,7 +18,40 @@ async function getDefaultSourceId(): Promise<string | null> {
   }
 }
 
+async function getWindowsMicrophones(): Promise<MicrophoneDevice[]> {
+  const base: MicrophoneDevice[] = [{ id: 'none', label: 'No microphone detected' }];
+
+  try {
+    const ffmpeg = getResolvedFfmpegCommand();
+    const { stdout, stderr } = await execFileAsync(ffmpeg.command, ['-hide_banner', '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'], {
+      env: ffmpeg.env,
+      timeout: 20000
+    });
+
+    const output = `${stdout}\n${stderr}`;
+    const seen = new Set<string>();
+    for (const match of output.matchAll(/"([^"]+)"\s+\(audio\)/g)) {
+      const label = match[1]?.trim();
+      if (!label || seen.has(label)) {
+        continue;
+      }
+
+      base.push({ id: label, label });
+      seen.add(label);
+    }
+  } catch {
+    // We intentionally do not invent a fake default microphone on Windows.
+    // If FFmpeg cannot enumerate real mic names, we disable mic input instead of passing an invalid default source.
+  }
+
+  return base.length > 1 ? base : [{ id: 'none', label: 'No microphone detected' }];
+}
+
 export async function getMicrophones(): Promise<MicrophoneDevice[]> {
+  if (process.platform === 'win32') {
+    return getWindowsMicrophones();
+  }
+
   const defaultSourceId = await getDefaultSourceId();
   const base: MicrophoneDevice[] = [{ id: defaultSourceId ?? 'default', label: 'Default Microphone' }];
 

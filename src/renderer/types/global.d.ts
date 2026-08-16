@@ -22,6 +22,8 @@ declare global {
       selectOutputDirectory: (currentDirectory: string) => Promise<string | null>;
       readRecording: (filePath: string) => Promise<ArrayBuffer>;
       getRecordingThumbnail: (filePath: string) => Promise<string>;
+      recordingExists: (filePath: string) => Promise<boolean>;
+      deleteRecording: (filePath: string) => Promise<boolean>;
       start: (options: RecorderOptions) => Promise<RecorderStatus>;
       pause: () => Promise<RecorderStatus>;
       resume: () => Promise<RecorderStatus>;

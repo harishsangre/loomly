@@ -108,10 +108,11 @@ export class RecorderService extends EventEmitter {
     this.ffmpegReady = ffmpegAvailable;
     this.ffmpegMessage = backendError ?? (ffmpegAvailable ? null : 'FFmpeg is required.\n\nUbuntu:\nsudo apt install ffmpeg\nWindows:\nInstall FFmpeg and add it to PATH.');
     this.availableMicrophones = microphones.length > 0 ? microphones : this.availableMicrophones;
+    const firstUsable = this.availableMicrophones.find((device) => device.id && device.id !== 'default' && device.id !== 'none');
     this.status = {
       ...this.status,
       backendType: backend.type,
-      microphone: this.availableMicrophones[0]?.id ?? this.status.microphone
+      microphone: firstUsable?.id ?? this.availableMicrophones[0]?.id ?? 'none'
     };
     this.lastError = backendError ?? null;
     this.emitStatus();
@@ -128,11 +129,12 @@ export class RecorderService extends EventEmitter {
     try {
       this.availableMicrophones = await getMicrophones();
     } catch {
-      this.availableMicrophones = [{ id: 'default', label: 'Default Microphone' }];
+      this.availableMicrophones = [{ id: 'none', label: 'No microphone detected' }];
     }
+    const firstUsable = this.availableMicrophones.find((device) => device.id && device.id !== 'default' && device.id !== 'none');
     this.status = {
       ...this.status,
-      microphone: this.availableMicrophones[0]?.id ?? this.status.microphone
+      microphone: firstUsable?.id ?? this.availableMicrophones[0]?.id ?? 'none'
     };
     this.emitStatus();
     return this.availableMicrophones;
@@ -310,11 +312,13 @@ export class RecorderService extends EventEmitter {
   }
 
   private resolveMicrophoneId(requestedMicrophone: string): string {
-    if (requestedMicrophone !== 'default') {
-      return requestedMicrophone;
+    const sanitized = (requestedMicrophone ?? '').trim().replace(/^audio=/i, '').replace(/^"|"$/g, '');
+
+    if (!sanitized || sanitized === 'none' || sanitized === 'default') {
+      return this.availableMicrophones.find((device) => device.id && device.id !== 'default' && device.id !== 'none')?.id ?? 'none';
     }
 
-    return this.availableMicrophones.find((device) => device.id !== 'default')?.id ?? requestedMicrophone;
+    return sanitized;
   }
 
   private async startSegment(): Promise<void> {
@@ -322,60 +326,87 @@ export class RecorderService extends EventEmitter {
       throw new Error('Recording session is not initialized.');
     }
 
-    this.segmentCounter += 1;
-    const segmentPath = path.join(this.sessionDir, 'capture.mp4');
-    this.activeSegmentPath = segmentPath;
-    this.segmentStartedAt = Date.now();
-
-    try {
-      await fs.rm(segmentPath, { force: true });
-    } catch {
-      // Best effort: allow a fresh capture file for the current session.
-    }
-
     const backend = this.backend ?? (await getCurrentRecorderBackend());
     this.backend = backend;
-    const args = backend.buildSegmentArgs(this.currentOptions, segmentPath);
-    const ffmpegCommand = getResolvedFfmpegCommand();
-    const ffmpeg = spawn(ffmpegCommand.command, args, {
-      env: ffmpegCommand.env,
-      stdio: ['pipe', 'ignore', 'pipe'],
-      windowsHide: true
-    });
 
-    this.closingIntent = false;
-    this.activeProcess = ffmpeg;
-    let stderrOutput = '';
-    const started = new Promise<void>((resolve, reject) => {
-      ffmpeg.once('spawn', () => resolve());
-      ffmpeg.once('error', (error) => reject(error));
-    });
-    ffmpeg.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      stderrOutput += text;
-      if (/Input #[0-9]+, pulse/.test(text) || /x11grab/.test(text)) {
-        return;
-      }
-    });
-    ffmpeg.on('error', (error) => {
-      this.lastError = error.message;
-      this.state = 'idle';
-      this.emitStatus();
-    });
-    ffmpeg.on('close', (code, signal) => {
-      const expectedClose = this.closingIntent || signal === 'SIGINT';
-      if (expectedClose) {
-        this.activeProcess = null;
-        return;
+    const launchSegment = async (useDefaultMic: boolean): Promise<void> => {
+      this.segmentCounter += 1;
+      const segmentPath = path.join(this.sessionDir!, 'capture.mp4');
+      this.activeSegmentPath = segmentPath;
+      this.segmentStartedAt = Date.now();
+
+      try {
+        await fs.rm(segmentPath, { force: true });
+      } catch {
+        // Best effort: allow a fresh capture file for the current session.
       }
 
-      if (this.state === 'recording') {
+      const options = {
+        ...this.currentOptions!,
+        microphone: useDefaultMic ? 'default' : this.resolveMicrophoneId(this.currentOptions!.microphone)
+      };
+
+      const args = backend.buildSegmentArgs(options, segmentPath);
+      const ffmpegCommand = getResolvedFfmpegCommand();
+      const ffmpeg = spawn(ffmpegCommand.command, args, {
+        env: ffmpegCommand.env,
+        stdio: ['pipe', 'ignore', 'pipe'],
+        windowsHide: true
+      });
+
+      this.closingIntent = false;
+      this.activeProcess = ffmpeg;
+      let stderrOutput = '';
+      const started = new Promise<void>((resolve, reject) => {
+        ffmpeg.once('spawn', () => resolve());
+        ffmpeg.once('error', (error) => reject(error));
+      });
+
+      ffmpeg.stderr.on('data', (chunk) => {
+        const text = chunk.toString();
+        stderrOutput += text;
+        if (/Input #[0-9]+, pulse/.test(text) || /x11grab/.test(text)) {
+          return;
+        }
+      });
+
+      ffmpeg.on('error', (error) => {
+        this.lastError = error.message;
+        this.state = 'idle';
+        this.emitStatus();
+      });
+
+      ffmpeg.on('close', async (code, signal) => {
+        const expectedClose = this.closingIntent || signal === 'SIGINT';
+        if (expectedClose) {
+          this.activeProcess = null;
+          return;
+        }
+
+        if (this.state !== 'recording') {
+          return;
+        }
+
         const details = stderrOutput
           .split('\n')
           .map((line) => line.trim())
           .filter(Boolean)
-          .slice(-3)
+          .slice(-6)
           .join(' ');
+
+        const inputError = /Error opening input|I\/O error|Cannot find a match for the device name|Could not open|Failed to set up|No such file or directory/i.test(details);
+        const isWindowsMicFailure = process.platform === 'win32' && inputError && options.microphone !== 'default';
+
+        if (isWindowsMicFailure && !useDefaultMic) {
+          this.currentOptions = { ...options, microphone: 'default' };
+          this.lastError = 'The selected microphone could not be opened, so the app is retrying with the default Windows microphone.';
+          this.emitStatus();
+          this.activeProcess = null;
+          this.activeSegmentPath = null;
+          await this.startSegment();
+          return;
+        }
+
         this.lastError = details
           ? `FFmpeg exited unexpectedly (code ${code ?? 'unknown'}).\n${details}`
           : `FFmpeg exited unexpectedly (code ${code ?? 'unknown'}).`;
@@ -383,9 +414,12 @@ export class RecorderService extends EventEmitter {
         this.activeProcess = null;
         this.activeSegmentPath = null;
         this.emitStatus();
-      }
-    });
-    await started;
+      });
+
+      await started;
+    };
+
+    await launchSegment(false);
   }
 
   private async stopActiveProcess(): Promise<void> {
