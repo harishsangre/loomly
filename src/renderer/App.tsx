@@ -119,6 +119,34 @@ function formatTime(totalMs: number): string {
   return [minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
 }
 
+function hasMissingDuration(item: RecordingItem): boolean {
+  return item.durationMs <= 0 || /^0+:0+$/.test(item.durationLabel.trim());
+}
+
+function getVideoDurationFromBuffer(arrayBuffer: ArrayBuffer): Promise<number> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    const objectUrl = URL.createObjectURL(new Blob([new Uint8Array(arrayBuffer)], { type: 'video/mp4' }));
+    const cleanup = () => {
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(objectUrl);
+    };
+
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      const durationMs = Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0;
+      cleanup();
+      resolve(durationMs);
+    };
+    video.onerror = () => {
+      cleanup();
+      resolve(0);
+    };
+    video.src = objectUrl;
+  });
+}
+
 function formatRelativeDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -403,6 +431,10 @@ export default function App() {
   );
   const recordingToolbarMode = useMemo(() => new URLSearchParams(window.location.search).get('mode') === 'recording-toolbar', []);
   const recordingPathsKey = recordings.map((item) => item.path).join('\n');
+  const missingDurationPathsKey = recordings
+    .filter(hasMissingDuration)
+    .map((item) => item.path)
+    .join('\n');
 
   const currentVideoPath =
     selectedVideoPath ?? status.finalVideoPath ?? getVisibleRecordings(recordings, 'library')[0]?.path ?? recordings[0]?.path ?? null;
@@ -568,6 +600,53 @@ export default function App() {
       active = false;
     };
   }, [recordingPathsKey]);
+
+  useEffect(() => {
+    let active = true;
+    const missingDurationPaths = recordings
+      .filter(hasMissingDuration)
+      .map((item) => item.path);
+
+    if (!missingDurationPaths.length) {
+      return;
+    }
+
+    void Promise.all(
+      missingDurationPaths.map(async (recordingPath) => {
+        try {
+          let durationMs = await window.recorder.getRecordingDuration(recordingPath);
+          if (durationMs <= 0) {
+            const recordingBuffer = await window.recorder.readRecording(recordingPath);
+            durationMs = await getVideoDurationFromBuffer(recordingBuffer);
+          }
+          return [recordingPath, durationMs] as const;
+        } catch {
+          return null;
+        }
+      })
+    ).then((entries) => {
+      if (!active) return;
+      const durationByPath = new Map(
+        entries
+          .filter((entry): entry is readonly [string, number] => Boolean(entry && entry[1] > 0))
+          .map(([recordingPath, durationMs]) => [recordingPath, durationMs])
+      );
+      if (!durationByPath.size) {
+        return;
+      }
+
+      setRecordings((current) =>
+        current.map((item) => {
+          const durationMs = durationByPath.get(item.path) ?? 0;
+          return durationMs > 0 ? { ...item, durationMs, durationLabel: formatTime(durationMs) } : item;
+        })
+      );
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [missingDurationPathsKey]);
 
   useEffect(() => {
     let active = true;
@@ -780,24 +859,6 @@ export default function App() {
       }
       setSelectedVideoPath(null);
       navigateToPage('library');
-      // Defensive: if user intends a region capture but no region is selected
-      // (was cleared or never set), open the region selector so we don't
-      // attempt to start FFmpeg with an empty/invalid region.
-      if (captureMode === 'region' && !selectedRegion) {
-        try {
-          const region = await window.recorder.selectRegion();
-          if (region) {
-            setSelectedRegion(region);
-          } else {
-            // User cancelled selection; abort start.
-            return;
-          }
-        } catch (err) {
-          setStatus((current) => ({ ...current, error: extractErrorMessage(err) }));
-          return;
-        }
-      }
-
       const next = await window.recorder.start({
         captureMode,
         microphone: selectedMicrophone,
@@ -981,7 +1042,7 @@ export default function App() {
             <div className="flex size-11 items-center justify-center rounded-[12px] bg-violet-100 text-violet-700">
               <Video className="size-6" />
             </div>
-            <h1 className="text-[20px] font-semibold tracking-[-0.02em]">Local Zoom</h1>
+            <h1 className="text-[20px] font-semibold tracking-[-0.02em]">Loomly</h1>
             <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-600">
               {shellState}
             </span>
@@ -1025,7 +1086,7 @@ export default function App() {
         </header>
 
         <div className="flex h-[calc(100vh-76px)]">
-          <aside className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white px-5 py-5">
+          <aside className="flex w-52 shrink-0 flex-col border-r border-slate-200 bg-white px-5 py-5">
             <nav className="space-y-1.5">
               {[
                 { icon: Folder, label: 'My library', section: 'library' as SidebarSection },
@@ -1091,7 +1152,7 @@ export default function App() {
           </aside>
 
           <section className="flex-1 overflow-y-auto bg-[#fbfbfd] p-8">
-            <div className={`grid items-start gap-8 ${showRecorder ? 'xl:grid-cols-[minmax(0,1fr)_380px]' : 'grid-cols-1'}`}>
+            <div className={`grid items-start gap-8 ${showRecorder ? 'xl:grid-cols-[minmax(0,1fr)_320px]' : 'grid-cols-1'}`}>
               <div className="min-w-0">
                 <div className="mb-6 flex items-center justify-between gap-5">
                   <div>
@@ -1126,16 +1187,17 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid gap-5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 306px))' }}>
+                <div className="overflow-y-auto overflow-x-hidden pr-2" style={{ maxHeight: 'calc(100vh - 260px)' }}>
+                  <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
                   {visibleRecordings.map((item) => (
-                    <article key={item.path} className="overflow-hidden rounded-[13px] border border-slate-200 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
-                      <button type="button" onClick={() => openRecording(item)} className="relative block h-[148px] w-full overflow-hidden bg-slate-900 text-left">
+                    <article key={item.path} className="min-w-0 overflow-hidden rounded-[13px] border border-slate-200 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.04)]">
+                      <button type="button" onClick={() => openRecording(item)} className="relative block h-[168px] w-full overflow-hidden bg-slate-900 text-left">
                         <img src={recordingThumbnails[item.path] ?? buildLibraryPosterDataUri(item)} alt={item.title} className="h-full w-full object-cover" />
                         <div className="absolute inset-0 bg-black/10" />
                         <span className="absolute left-1/2 top-1/2 flex size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-violet-600 shadow-lg">
                           <Play className="ml-0.5 size-5 fill-current" />
                         </span>
-                        <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-white">{item.durationLabel}</span>
+                        <span className="absolute bottom-3 right-3 rounded-md bg-black/75 px-2 py-1 text-[12px] font-semibold text-white">{item.durationLabel}</span>
                       </button>
                       <div className="px-3.5 pb-3 pt-3">
                         {editingRecordingPath === item.path ? (
@@ -1178,7 +1240,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => beginRenameRecording(item.path)}
-                            className="block w-full text-left text-sm font-semibold text-slate-900 transition hover:text-violet-700"
+                            className="block w-full text-left text-lg font-semibold text-slate-900 transition hover:text-violet-700"
                             title="Rename recording"
                           >
                             {item.title}
@@ -1211,7 +1273,7 @@ export default function App() {
                   ))}
 
                   {showRecorder ? (
-                    <button type="button" onClick={() => void handleStart()} className="flex min-h-[255px] items-center justify-center rounded-[13px] border border-dashed border-violet-300 bg-white/70 text-center transition hover:bg-white">
+                    <button type="button" onClick={() => void handleStart()} className="flex min-h-[220px] items-center justify-center rounded-[13px] border border-dashed border-violet-300 bg-white/70 text-center transition hover:bg-white">
                       <span>
                         <span className="mx-auto flex size-14 items-center justify-center rounded-full bg-violet-100 text-violet-700">
                           <Plus className="size-7" />
@@ -1223,7 +1285,7 @@ export default function App() {
                   ) : null}
 
                   {!visibleRecordings.length && !showRecorder ? (
-                    <div className="col-span-full flex min-h-[255px] items-center justify-center rounded-[13px] border border-dashed border-slate-300 bg-white p-6 text-center">
+                    <div className="col-span-full flex min-h-[220px] items-center justify-center rounded-[13px] border border-dashed border-slate-300 bg-white p-6 text-center">
                       <div>
                         <Video className="mx-auto size-8 text-slate-400" />
                         <p className="mt-3 text-sm font-semibold text-slate-700">No items here yet</p>
@@ -1231,6 +1293,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : null}
+                  </div>
                 </div>
 
                 {showRecorder ? (

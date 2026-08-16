@@ -1,11 +1,15 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, screen } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import type { RecorderOptions, Region, RecorderStatus } from '../../shared/recorder';
 import { getResolvedFfmpegCommand, runProcess } from '../ffmpeg/ffmpeg';
 import { getCaptureDevices } from '../ffmpeg/devices';
 import { RecorderService } from '../recorder/recorder.service';
+
+const execFileAsync = promisify(execFile);
 
 interface RegionSelectorState {
   overlayWindow: BrowserWindow | null;
@@ -108,6 +112,37 @@ async function getRecordingThumbnail(videoPath: string): Promise<string> {
   return `data:image/jpeg;base64,${thumbnail.toString('base64')}`;
 }
 
+async function getRecordingDurationMs(videoPath: string): Promise<number> {
+  try {
+    await fs.access(videoPath);
+  } catch {
+    return 0;
+  }
+
+  const ffmpegCommand = getResolvedFfmpegCommand();
+  const ffprobeDir = path.dirname(ffmpegCommand.command);
+  const ffprobeCommand = process.platform === 'win32'
+    ? path.join(ffprobeDir, 'ffprobe.exe')
+    : path.join(ffprobeDir, 'ffprobe');
+  const probePath = await fs.access(ffprobeCommand).then(() => ffprobeCommand).catch(() => process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+
+  try {
+    const { stdout } = await execFileAsync(probePath, [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration',
+      '-of',
+      'default=nw=1:nk=1',
+      videoPath
+    ], { env: ffmpegCommand.env });
+    const duration = Number.parseFloat(stdout.trim());
+    return Number.isFinite(duration) ? Math.max(0, Math.round(duration * 1000)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function registerRecorderIpc(args: {
   service: RecorderService;
   onStatus: (status: RecorderStatus) => void;
@@ -146,6 +181,10 @@ export function registerRecorderIpc(args: {
     return getRecordingThumbnail(filePath);
   });
 
+  ipcMain.handle('recorder:get-recording-duration', async (_event, filePath: string) => {
+    return getRecordingDurationMs(filePath);
+  });
+
   ipcMain.handle('recorder:recording-exists', async (_event, filePath: string) => {
     try {
       await fs.access(filePath);
@@ -159,6 +198,7 @@ export function registerRecorderIpc(args: {
     try {
       await fs.access(filePath);
       await fs.unlink(filePath);
+      await fs.unlink(thumbnailPathFor(filePath)).catch(() => undefined);
       return true;
     } catch {
       return false;
