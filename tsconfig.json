@@ -11,13 +11,12 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
     },
     "types": ["node"]
   },
-  "include": ["src", "vite.config.ts"],
-  "references": [{ "path": "./tsconfig.main.json" }]
+  "include": ["src", "vite.config.ts"]
 }

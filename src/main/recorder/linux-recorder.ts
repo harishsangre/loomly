@@ -5,14 +5,16 @@ const AUDIO_NOISE_REDUCTION_FILTER = 'afftdn=nf=-25,highpass=f=80,lowpass=f=1200
 
 function buildX11Input(display: string, region?: Region): { inputArgs: string[]; inputLabel: string } {
   if (region) {
+    const rawWidth = Math.max(1, Math.floor(region.width));
+    const rawHeight = Math.max(1, Math.floor(region.height));
+    const evenWidth = rawWidth % 2 === 0 ? rawWidth : Math.max(1, rawWidth - 1);
+    const evenHeight = rawHeight % 2 === 0 ? rawHeight : Math.max(1, rawHeight - 1);
+    const offsetX = Math.floor(region.x);
+    const offsetY = Math.floor(region.y);
+
     return {
-      inputArgs: [
-        '-video_size',
-        `${Math.max(1, Math.floor(region.width))}x${Math.max(1, Math.floor(region.height))}`,
-        '-i',
-        `${display}+${Math.floor(region.x)},${Math.floor(region.y)}`
-      ],
-      inputLabel: `${display}+${Math.floor(region.x)},${Math.floor(region.y)}`
+      inputArgs: ['-video_size', `${evenWidth}x${evenHeight}`, '-i', `${display}+${offsetX},${offsetY}`],
+      inputLabel: `${display}+${offsetX},${offsetY}`
     };
   }
 
